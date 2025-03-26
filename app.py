@@ -60,10 +60,12 @@ def webhook():
 @app.route(TELEGRAM_WEBHOOK_PATH, methods=["POST"])
 def telegram_webhook():
     try:
-        data = request.get_json(force=True)  # <-- wichtig: force=True
+        data = request.get_json(force=True)
+        print("📥 Eingehender Telegram-Webhook:", json.dumps(data, indent=2))
     except Exception as e:
-        print("❌ Fehler beim JSON-Parsing:", str(e))
+        print("❌ Fehler beim Verarbeiten:", str(e))
         return jsonify({"status": "invalid"}), 400
+
 
     print("🔔 Telegram Webhook-Eingang:", json.dumps(data, indent=2))
 
