@@ -9,8 +9,8 @@ import os
 app = Flask(__name__)
 
 # Telegram Bot Token & Chat ID from Environment Variables
-TELEGRAM_TOKEN = os.environ.get("7958399333:AAEGvMvyD_MhzDT47ZMHXGmJnJ0B_vh9KdU")
-TELEGRAM_CHAT_ID = os.environ.get("805285674")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 TELEGRAM_WEBHOOK_PATH = "/telegram"
 
