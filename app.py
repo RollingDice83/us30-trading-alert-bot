@@ -1,22 +1,24 @@
 from flask import Flask, request, jsonify
 import datetime
+import re
+import requests
 
 app = Flask(__name__)
 
 # Speicher für aktive Setups
 active_setups = []
 
-# Telegram Funktionen (Pseudocode - hier ersetzt du mit deinem Telegram-Token & ChatID)
-import requests
+# Telegram Bot Config
 TELEGRAM_TOKEN = '7958399333:AAEGvMvyD_MhzDT47ZMHXGmJnJ0B_vh9KdU'
 CHAT_ID = '805285674'
+
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'Markdown'}
     requests.post(url, json=payload)
 
-# Hilfsfunktionen
+
 def parse_signal(message):
     signal = {
         'direction': None,
@@ -35,8 +37,9 @@ def parse_signal(message):
         'time': datetime.datetime.utcnow().isoformat()
     }
 
-    lines = message.lower().split('|')
-    for item in lines:
+    parts = re.split(r'[|\n ]', message.lower())
+    for item in parts:
+        item = item.strip()
         if '@' in item or 'bei' in item:
             digits = ''.join(filter(str.isdigit, item))
             if digits:
@@ -75,11 +78,12 @@ def parse_signal(message):
 
     return signal
 
+
 def calculate_signal_score(signal):
     score = 0
     if signal['rsi'] and signal['rsi'] < 30:
         score += 2
-    if signal['momentum'] == 'bullish' or signal['momentum'] == 'bearish':
+    if signal['momentum'] in ['bullish', 'bearish']:
         score += 2
     if signal['volume']:
         score += 1
@@ -92,6 +96,7 @@ def calculate_signal_score(signal):
     if signal['liquidity']:
         score += 1
     return score
+
 
 def build_bot_response(signal, score):
     response = f"\n📌 *Neues US30 Setup erkannt*\n"
@@ -110,6 +115,7 @@ def build_bot_response(signal, score):
     response += f"⚙️ Signalqualität: {score}/10\n"
     return response
 
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
@@ -119,6 +125,15 @@ def webhook():
     message = data.get('message')
     if not message:
         return 'Missing message', 400
+
+    if message.lower().startswith('/status'):
+        return status()
+    elif message.lower().startswith('/help'):
+        return help()
+    elif message.lower().startswith('/reset'):
+        active_setups.clear()
+        send_telegram_message("♻️ Alle Setups wurden gelöscht.")
+        return jsonify({'status': 'cleared'}), 200
 
     signal = parse_signal(message)
     score = calculate_signal_score(signal)
@@ -131,6 +146,7 @@ def webhook():
     else:
         send_telegram_message(f"🟢 Nachricht erhalten: {message}")
         return jsonify({'status': 'echoed'}), 200
+
 
 @app.route('/status', methods=['GET'])
 def status():
@@ -153,6 +169,7 @@ def status():
     send_telegram_message(text)
     return jsonify({'status': 'sent', 'setups': len(active_setups)}), 200
 
+
 @app.route('/help', methods=['GET'])
 def help():
     help_text = """
@@ -170,15 +187,21 @@ def help():
 - FVG / Liquidity Zone
 
 ✏️ Beispiel:
-US30 Long @42100 | TP: 42800 | SL: 41900 | RSI: 29 | Momentum: Bullish | Smack
+US30 Long @42100 TP: 42800 SL: 41900 RSI: 29 Momentum: Bullish Smack
 
 📌 Schließe Position mit:
 US30 Long closed @42600 entry 42100
 oder
 US30 Long partial close @42600 (50%) entry 42100
+
+🧠 Chat-Kommandos:
+/status → Aktive Setups anzeigen
+/help → Befehlsglossar anzeigen
+/reset → Alle Setups löschen
 """
     send_telegram_message(help_text)
     return jsonify({'status': 'sent help'}), 200
+
 
 if __name__ == '__main__':
     app.run(debug=True)
