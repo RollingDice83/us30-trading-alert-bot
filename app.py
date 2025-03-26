@@ -4,12 +4,13 @@ import json
 import yfinance as yf
 import threading
 import time
+import os
 
 app = Flask(__name__)
 
-# Telegram Bot Token & Chat ID
-TELEGRAM_TOKEN = "7958399333:AAEGvMvyD_MhzDT47ZMHXGmJnJ0B_vh9KdU"
-TELEGRAM_CHAT_ID = "805285674"
+# Telegram Bot Token & Chat ID from Environment Variables
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 TELEGRAM_WEBHOOK_PATH = "/telegram"
 
@@ -32,8 +33,12 @@ def parse_signal(message):
     }
 
 def send_telegram_message(text):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Telegram-Konfiguration fehlt.")
+        return
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-    requests.post(TELEGRAM_API_URL, json=payload)
+    response = requests.post(TELEGRAM_API_URL, json=payload)
+    print("📨 Telegram API Antwort:", response.status_code, response.text)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -55,6 +60,7 @@ def webhook():
 @app.route(TELEGRAM_WEBHOOK_PATH, methods=["POST"])
 def telegram_webhook():
     data = request.get_json()
+    print("🔔 Telegram Webhook-Eingang:", json.dumps(data, indent=2))
     if not data or "message" not in data:
         return jsonify({"status": "no message"}), 400
 
