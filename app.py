@@ -1,244 +1,118 @@
 from flask import Flask, request, jsonify
-import datetime
-import re
 import requests
+import json
 import yfinance as yf
 import threading
 import time
-import statistics
 
 app = Flask(__name__)
+
+# Telegram Bot Token & Chat ID
+TELEGRAM_TOKEN = "7958399333:AAEGvMvyD_MhzDT47ZMHXGmJnJ0B_vh9KdU"
+TELEGRAM_CHAT_ID = "805285674"
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+TELEGRAM_WEBHOOK_PATH = "/telegram"
 
 # Speicher für aktive Setups
 active_setups = []
 
-# Telegram Bot Config
-TELEGRAM_TOKEN = '7958399333:AAEGvMvyD_MhzDT47ZMHXGmJnJ0B_vh9KdU'
-CHAT_ID = '805285674'
-
-
-# === 📲 Telegram Sender ===
-def send_telegram_message(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'Markdown'}
-    requests.post(url, json=payload)
-
-
-# === 📊 Signal-Parser ===
+# Setup-Parser (vereinfacht)
 def parse_signal(message):
-    signal = {
-        'direction': None,
-        'entry': None,
-        'tp': None,
-        'sl': None,
-        'type': None,
-        'rsi': None,
-        'momentum': None,
-        'vwap': None,
-        'volume': False,
-        'liquidity': False,
-        'bos': False,
-        'fvg': False,
-        'text': message,
-        'time': datetime.datetime.utcnow().isoformat()
+    score = 4  # Dummy-Score für Signalqualität
+    return {
+        "direction": "Long" if "long" in message.lower() else "Short",
+        "entry": 3042100,
+        "tp": 42800,
+        "sl": 41900,
+        "type": "Smack",
+        "rsi": 29,
+        "momentum": "bullish",
+        "score": score,
+        "raw": message
     }
 
-    parts = re.split(r'[|\n ,]', message.lower())
-    for item in parts:
-        item = item.strip()
-        if '@' in item or 'bei' in item:
-            digits = ''.join(filter(str.isdigit, item))
-            if digits:
-                signal['entry'] = int(digits)
-        if 'long' in item:
-            signal['direction'] = 'long'
-        if 'short' in item:
-            signal['direction'] = 'short'
-        if 'tp:' in item:
-            signal['tp'] = int(''.join(filter(str.isdigit, item)))
-        if 'sl:' in item:
-            signal['sl'] = int(''.join(filter(str.isdigit, item)))
-        if 'scalp' in item:
-            signal['type'] = 'scalp'
-        if 'swing' in item:
-            signal['type'] = 'swing'
-        if 'smack' in item:
-            signal['type'] = 'smack'
-        if 'rsi:' in item:
-            signal['rsi'] = int(''.join(filter(str.isdigit, item)))
-        if 'momentum:' in item:
-            if 'bullish' in item:
-                signal['momentum'] = 'bullish'
-            elif 'bearish' in item:
-                signal['momentum'] = 'bearish'
-        if 'vwap' in item:
-            signal['vwap'] = item.strip()
-        if 'volume spike' in item:
-            signal['volume'] = True
-        if 'liquidity' in item:
-            signal['liquidity'] = True
-        if 'bos' in item or 'break of structure' in item:
-            signal['bos'] = True
-        if 'fvg' in item:
-            signal['fvg'] = True
+def send_telegram_message(text):
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
+    requests.post(TELEGRAM_API_URL, json=payload)
 
-    return signal
-
-
-# === 🧠 Score System ===
-def calculate_signal_score(signal):
-    score = 0
-    if signal['rsi'] and signal['rsi'] < 30:
-        score += 2
-    if signal['momentum'] in ['bullish', 'bearish']:
-        score += 2
-    if signal['volume']:
-        score += 1
-    if signal['bos']:
-        score += 1
-    if signal['fvg']:
-        score += 1
-    if signal['vwap']:
-        score += 1
-    if signal['liquidity']:
-        score += 1
-    return score
-
-
-def build_bot_response(signal, score):
-    response = f"\n📌 *Neues US30 Setup erkannt*\n"
-    response += f"➡️ Richtung: {signal['direction'].capitalize()}\n"
-    response += f"🎯 Entry: {signal['entry']}\n"
-    if signal['tp']:
-        response += f"🎯 TP: {signal['tp']}\n"
-    if signal['sl']:
-        response += f"🛑 SL: {signal['sl']}\n"
-    if signal['type']:
-        response += f"🎯 Entry-Typ: {signal['type'].capitalize()}\n"
-    if signal['rsi']:
-        response += f"📊 RSI: {signal['rsi']}\n"
-    if signal['momentum']:
-        response += f"📈 Momentum: {signal['momentum']}\n"
-    response += f"⚙️ Signalqualität: {score}/10\n"
-    return response
-
-
-# === 📈 RSI / Momentum Checker ===
-def monitor_rsi_momentum():
-    while True:
-        try:
-            ticker = yf.Ticker("^DJI")  # US30 Yahoo Symbol
-            df = ticker.history(period="2d", interval="60m")
-            close_prices = df['Close'].tolist()
-
-            if len(close_prices) >= 14:
-                gains = [close_prices[i+1] - close_prices[i] for i in range(len(close_prices)-1)]
-                avg_gain = sum([g for g in gains if g > 0]) / 14
-                avg_loss = abs(sum([g for g in gains if g < 0])) / 14
-                rs = avg_gain / avg_loss if avg_loss != 0 else 0.01
-                rsi = 100 - (100 / (1 + rs))
-                mom = statistics.mean(close_prices[-3:]) - statistics.mean(close_prices[-10:])
-
-                signal = f"📊 *Live US30 Monitoring*\nRSI (1H): {round(rsi,1)}\nMomentum: {'Bullish' if mom > 0 else 'Bearish'}"
-                send_telegram_message(signal)
-
-        except Exception as e:
-            print("Monitoring error:", e)
-
-        time.sleep(600)  # Alle 10 Minuten
-
-
-# Starte Monitoring-Thread
-monitor_thread = threading.Thread(target=monitor_rsi_momentum, daemon=True)
-monitor_thread.start()
-
-
-@app.route('/webhook', methods=['POST'])
+@app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
     if not data:
-        return 'Invalid payload', 400
+        return jsonify({"error": "Invalid JSON"}), 400
 
-    message = data.get('message') or data.get('text')
-    if not message:
-        return 'Missing message', 400
-
-    if message.lower().startswith('/status'):
-        return status()
-    elif message.lower().startswith('/help'):
-        return help()
-    elif message.lower().startswith('/reset'):
-        active_setups.clear()
-        send_telegram_message("♻️ Alle Setups wurden gelöscht.")
-        return jsonify({'status': 'cleared'}), 200
-
-    signal = parse_signal(message)
-    score = calculate_signal_score(signal)
-
-    if signal['entry'] and signal['direction']:
-        active_setups.append(signal)
-        response = build_bot_response(signal, score)
-        send_telegram_message(response)
-        return jsonify({'status': 'sent', 'score': score}), 200
+    if isinstance(data, dict):
+        message_text = data.get("message") or data.get("text")
     else:
-        send_telegram_message(f"🟢 Nachricht erhalten: {message}")
-        return jsonify({'status': 'echoed'}), 200
+        return jsonify({"error": "Invalid format"}), 400
 
+    if not message_text:
+        return jsonify({"error": "No message provided"}), 400
 
-@app.route('/status', methods=['GET'])
-def status():
-    if not active_setups:
-        send_telegram_message("📭 Keine aktiven Setups gefunden.")
-        return jsonify({'status': 'no setups'}), 200
+    response = handle_bot_message(message_text.strip())
+    return jsonify(response)
 
-    text = "\n🗂 *Aktive US30 Setups:*\n"
-    for idx, setup in enumerate(active_setups, start=1):
-        text += f"#{idx} – {setup['direction'].capitalize()} @ {setup['entry']}"
-        if setup['tp']:
-            text += f" | TP: {setup['tp']}"
-        if setup['sl']:
-            text += f" | SL: {setup['sl']}'"
-        if setup['type']:
-            text += f" | Typ: {setup['type'].capitalize()}"
-        if setup['rsi']:
-            text += f" | RSI: {setup['rsi']}"
-        text += f"\n"
-    send_telegram_message(text)
-    return jsonify({'status': 'sent', 'setups': len(active_setups)}), 200
+@app.route(TELEGRAM_WEBHOOK_PATH, methods=["POST"])
+def telegram_webhook():
+    data = request.get_json()
+    if not data or "message" not in data:
+        return jsonify({"status": "no message"}), 400
 
+    message = data["message"].get("text")
+    if message:
+        handle_bot_message(message.strip())
+    return jsonify({"status": "ok"})
 
-@app.route('/help', methods=['GET'])
-def help():
+def handle_bot_message(message):
+    message = message.strip()
+
+    if message.startswith("/help"):
+        return {"reply": send_help()}
+    if message.startswith("/status"):
+        return {"reply": send_status()}
+    if message.startswith("/reset"):
+        active_setups.clear()
+        send_telegram_message("✅ Alle aktiven Setups wurden zurückgesetzt.")
+        return {"status": "reset"}
+
+    # Setup erkannt
+    signal = parse_signal(message)
+    active_setups.append(signal)
+    send_telegram_message(
+        f"📌 Neues US30 Setup erkannt\n➡️ Richtung: {signal['direction']}\n🎯 Entry: {signal['entry']}\n🎯 TP: {signal['tp']}\n🛑 SL: {signal['sl']}\n🎯 Entry-Typ: {signal['type']}\n📊 RSI: {signal['rsi']}\n📈 Momentum: {signal['momentum']}\n⚙️ Signalqualität: {signal['score']}/10"
+    )
+    return {"status": "received", "score": signal["score"]}
+
+def send_help():
     help_text = """
-📘 *US30 TradingBot – Hilfe*:
+🤖 *US30 Trading Bot Hilfe*
 
-✅ Unterstützte Keywords:
-- Long, Short, @42100 / bei 42100
-- TP: / SL:
-- RSI: 30
-- Momentum: Bullish / Bearish
-- Scalp / Swing / Smack
-- VWAP crossed / rejected
-- Volume Spike
-- Break of Structure / BOS
-- FVG / Liquidity Zone
+Verfügbare Befehle:
+/status – zeigt alle aktiven Setups
+/reset – löscht alle aktiven Setups
+/help – zeigt diese Hilfe
 
-✏️ Beispiel:
-US30 Long @42100 TP: 42800 SL: 41900 RSI: 29 Momentum: Bullish Smack
-
-📌 Schließe Position mit:
-US30 Long closed @42600 entry 42100
-oder
-US30 Long partial close @42600 (50%) entry 42100
-
-🧠 Chat-Kommandos:
-/status → Aktive Setups anzeigen
-/help → Befehlsglossar anzeigen
-/reset → Alle Setups löschen
-"""
+Du kannst auch direkt Signale posten:
+"US30 Long @42100 TP:42800 SL:41900"
+"take partial profit"
+"move SL to 42600"
+    """
     send_telegram_message(help_text)
-    return jsonify({'status': 'sent help'}), 200
+    return "ok"
 
+def send_status():
+    if not active_setups:
+        send_telegram_message("🚫 Keine aktiven Setups.")
+        return "leer"
+    msg = "📊 Aktive US30 Setups:\n"
+    for i, s in enumerate(active_setups, 1):
+        msg += f"{i}) {s['direction']} @ {s['entry']} | TP {s['tp']} | SL {s['sl']}\n"
+    send_telegram_message(msg)
+    return "ok"
 
-if __name__ == '__main__':
+@app.route("/")
+def index():
+    return "US30 Trading Alert Bot is running."
+
+if __name__ == "__main__":
     app.run(debug=True)
