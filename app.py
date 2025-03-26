@@ -17,6 +17,7 @@ print("🛠️ TELEGRAM_CHAT_ID geladen:", TELEGRAM_CHAT_ID)
 
 # Speicher für aktive Setups
 active_setups = []
+account_status = {"equity": 14250, "balance": 16500, "daily_profit": 870}
 
 # Setup-Parser (vereinfacht)
 def parse_signal(message):
@@ -62,7 +63,7 @@ def webhook():
 def telegram_webhook():
     try:
         data = request.get_json(force=True)
-        print("📥 Eingehender Telegram-Webhook:", json.dumps(data, indent=2))
+        print("📦 RAW Telegram Message:", json.dumps(data, indent=2))
     except Exception as e:
         print("❌ Fehler beim Verarbeiten:", str(e))
         return jsonify({"status": "invalid"}), 400
@@ -70,14 +71,13 @@ def telegram_webhook():
     if not data or "message" not in data:
         return jsonify({"status": "no message"}), 400
 
-   message = data["message"].get("text", "")
-if not message:
-    return jsonify({"status": "no text"}), 200
+    message = data["message"].get("text", "")
+    if not message:
+        return jsonify({"status": "no text"}), 200
 
-    if message:
-        response = handle_bot_message(message.strip())
-        if isinstance(response, dict) and "reply" in response:
-            send_telegram_message(response["reply"])
+    response = handle_bot_message(message.strip())
+    if isinstance(response, dict) and "reply" in response:
+        send_telegram_message(response["reply"])
     return jsonify({"status": "ok"})
 
 def handle_bot_message(message):
@@ -90,6 +90,16 @@ def handle_bot_message(message):
     if message.startswith("/reset"):
         active_setups.clear()
         return {"reply": "✅ Alle aktiven Setups wurden zurückgesetzt."}
+    if message.startswith("/equity"):
+        return {"reply": f"💰 Aktuelle Equity: ${account_status['equity']:.2f}"}
+    if message.startswith("/balance"):
+        return {"reply": f"🏦 Aktuelles Kontoguthaben: ${account_status['balance']:.2f}"}
+    if message.startswith("/profit"):
+        return {"reply": f"📈 Tagesgewinn bisher: ${account_status['daily_profit']:.2f}"}
+    if message.startswith("/panic-reset"):
+        active_setups.clear()
+        account_status["equity"] = 0
+        return {"reply": "⚠️ PANIC RESET: Alle Setups gelöscht und Equity auf 0 gesetzt."}
 
     # Setup erkannt
     signal = parse_signal(message)
@@ -104,12 +114,16 @@ Verfügbare Befehle:
 /status – zeigt alle aktiven Setups
 /reset – löscht alle aktiven Setups
 /help – zeigt diese Hilfe
+/equity – zeigt aktuelle Equity
+/balance – zeigt Kontoguthaben
+/profit – zeigt Tagesgewinn
+/panic-reset – löscht alles und setzt Equity auf 0
 
 Du kannst auch direkt Signale posten:
 "US30 Long @42100 TP:42800 SL:41900"
 "take partial profit"
 "move SL to 42600"
-    """
+"""
 
 def send_status():
     if not active_setups:
