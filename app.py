@@ -70,7 +70,10 @@ def telegram_webhook():
     if not data or "message" not in data:
         return jsonify({"status": "no message"}), 400
 
-    message = data["message"].get("text")
+   message = data["message"].get("text", "")
+if not message:
+    return jsonify({"status": "no text"}), 200
+
     if message:
         response = handle_bot_message(message.strip())
         if isinstance(response, dict) and "reply" in response:
