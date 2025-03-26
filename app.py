@@ -9,8 +9,8 @@ app = Flask(__name__)
 active_setups = []
 
 # Telegram Bot Config
-TELEGRAM_TOKEN = '7958399333:AAEGvMvyD_MhzDT47ZMHXGmJnJ0B_vh9KdU'
-CHAT_ID = '805285674'
+TELEGRAM_TOKEN = 'YOUR_TELEGRAM_TOKEN'
+CHAT_ID = 'YOUR_CHAT_ID'
 
 
 def send_telegram_message(text):
