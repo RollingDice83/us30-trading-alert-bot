@@ -2,6 +2,10 @@ from flask import Flask, request, jsonify
 import datetime
 import re
 import requests
+import yfinance as yf
+import threading
+import time
+import statistics
 
 app = Flask(__name__)
 
@@ -9,16 +13,18 @@ app = Flask(__name__)
 active_setups = []
 
 # Telegram Bot Config
-TELEGRAM_TOKEN = 'YOUR_TELEGRAM_TOKEN'
-CHAT_ID = 'YOUR_CHAT_ID'
+TELEGRAM_TOKEN = '7958399333:AAEGvMvyD_MhzDT47ZMHXGmJnJ0B_vh9KdU'
+CHAT_ID = '805285674'
 
 
+# === 📲 Telegram Sender ===
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'Markdown'}
     requests.post(url, json=payload)
 
 
+# === 📊 Signal-Parser ===
 def parse_signal(message):
     signal = {
         'direction': None,
@@ -37,7 +43,7 @@ def parse_signal(message):
         'time': datetime.datetime.utcnow().isoformat()
     }
 
-    parts = re.split(r'[|\n ]', message.lower())
+    parts = re.split(r'[|\n ,]', message.lower())
     for item in parts:
         item = item.strip()
         if '@' in item or 'bei' in item:
@@ -79,6 +85,7 @@ def parse_signal(message):
     return signal
 
 
+# === 🧠 Score System ===
 def calculate_signal_score(signal):
     score = 0
     if signal['rsi'] and signal['rsi'] < 30:
@@ -114,6 +121,36 @@ def build_bot_response(signal, score):
         response += f"📈 Momentum: {signal['momentum']}\n"
     response += f"⚙️ Signalqualität: {score}/10\n"
     return response
+
+
+# === 📈 RSI / Momentum Checker ===
+def monitor_rsi_momentum():
+    while True:
+        try:
+            ticker = yf.Ticker("^DJI")  # US30 Yahoo Symbol
+            df = ticker.history(period="2d", interval="60m")
+            close_prices = df['Close'].tolist()
+
+            if len(close_prices) >= 14:
+                gains = [close_prices[i+1] - close_prices[i] for i in range(len(close_prices)-1)]
+                avg_gain = sum([g for g in gains if g > 0]) / 14
+                avg_loss = abs(sum([g for g in gains if g < 0])) / 14
+                rs = avg_gain / avg_loss if avg_loss != 0 else 0.01
+                rsi = 100 - (100 / (1 + rs))
+                mom = statistics.mean(close_prices[-3:]) - statistics.mean(close_prices[-10:])
+
+                signal = f"📊 *Live US30 Monitoring*\nRSI (1H): {round(rsi,1)}\nMomentum: {'Bullish' if mom > 0 else 'Bearish'}"
+                send_telegram_message(signal)
+
+        except Exception as e:
+            print("Monitoring error:", e)
+
+        time.sleep(600)  # Alle 10 Minuten
+
+
+# Starte Monitoring-Thread
+monitor_thread = threading.Thread(target=monitor_rsi_momentum, daemon=True)
+monitor_thread.start()
 
 
 @app.route('/webhook', methods=['POST'])
@@ -160,7 +197,7 @@ def status():
         if setup['tp']:
             text += f" | TP: {setup['tp']}"
         if setup['sl']:
-            text += f" | SL: {setup['sl']}"
+            text += f" | SL: {setup['sl']}'"
         if setup['type']:
             text += f" | Typ: {setup['type'].capitalize()}"
         if setup['rsi']:
