@@ -38,7 +38,11 @@ def send_telegram_message(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("⚠️ Telegram-Konfiguration fehlt.")
         return
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
     response = requests.post(TELEGRAM_API_URL, json=payload)
     print("📨 Telegram API Antwort:", response.status_code, response.text)
 
@@ -104,7 +108,15 @@ def handle_bot_message(message):
     # Setup erkannt
     signal = parse_signal(message)
     active_setups.append(signal)
-    return {"reply": f"📌 Neues US30 Setup erkannt\n➡️ Richtung: {signal['direction']}\n🎯 Entry: {signal['entry']}\n🎯 TP: {signal['tp']}\n🛑 SL: {signal['sl']}\n🎯 Entry-Typ: {signal['type']}\n📊 RSI: {signal['rsi']}\n📈 Momentum: {signal['momentum']}\n⚙️ Signalqualität: {signal['score']}/10"}
+    return {"reply": f"""📌 Neues US30 Setup erkannt
+➡️ Richtung: {signal['direction']}
+🎯 Entry: {signal['entry']}
+🎯 TP: {signal['tp']}
+🛑 SL: {signal['sl']}
+🎯 Entry-Typ: {signal['type']}
+📊 RSI: {signal['rsi']}
+📈 Momentum: {signal['momentum']}
+⚙️ Signalqualität: {signal['score']}/10"""}
 
 def send_help():
     return """
