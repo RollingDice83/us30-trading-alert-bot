@@ -38,11 +38,7 @@ def send_telegram_message(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("⚠️ Telegram-Konfiguration fehlt.")
         return
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     response = requests.post(TELEGRAM_API_URL, json=payload)
     print("📨 Telegram API Antwort:", response.status_code, response.text)
 
@@ -105,6 +101,20 @@ def handle_bot_message(message):
         account_status["equity"] = 0
         return {"reply": "⚠️ PANIC RESET: Alle Setups gelöscht und Equity auf 0 gesetzt."}
 
+    if message.startswith("/close"):
+        if active_setups:
+            closed = active_setups.pop()
+            return {"reply": f"❌ Letztes Setup entfernt: {closed['direction']} @ {closed['entry']}"}
+        else:
+            return {"reply": "⚠️ Keine Setups zum Entfernen."}
+
+    if message.startswith("/trade"):
+        signal = parse_signal("US30 Long @42100 TP:42800 SL:41900")
+        if signal['score'] >= 6:
+            return {"reply": f"🚀 Starkes Signal erkannt: {signal['direction']} mit Score {signal['score']}!"}
+        else:
+            return {"reply": f"ℹ️ Signal erkannt, aber niedrige Qualität: {signal['score']} Punkte."}
+
     # Setup erkannt
     signal = parse_signal(message)
     active_setups.append(signal)
@@ -130,6 +140,8 @@ Verfügbare Befehle:
 /balance – zeigt Kontoguthaben
 /profit – zeigt Tagesgewinn
 /panic-reset – löscht alles und setzt Equity auf 0
+/close – entfernt das letzte Setup
+/trade – testet ein Beispielsignal auf Qualität
 
 Du kannst auch direkt Signale posten:
 "US30 Long @42100 TP:42800 SL:41900"
