@@ -14,7 +14,10 @@ def home():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    message = data.get("message", "🚨 Alarm empfangen, aber keine Nachricht enthalten.")
+    if not data or "message" not in data:
+        return "Invalid payload", 400
+
+    message = data["message"]
     send_telegram_message(message)
     return "OK", 200
 
