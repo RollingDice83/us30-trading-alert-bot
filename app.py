@@ -59,8 +59,14 @@ def webhook():
 
 @app.route(TELEGRAM_WEBHOOK_PATH, methods=["POST"])
 def telegram_webhook():
-    data = request.get_json()
+    try:
+        data = request.get_json(force=True)  # <-- wichtig: force=True
+    except Exception as e:
+        print("❌ Fehler beim JSON-Parsing:", str(e))
+        return jsonify({"status": "invalid"}), 400
+
     print("🔔 Telegram Webhook-Eingang:", json.dumps(data, indent=2))
+
     if not data or "message" not in data:
         return jsonify({"status": "no message"}), 400
 
@@ -70,6 +76,7 @@ def telegram_webhook():
         if isinstance(response, dict) and "reply" in response:
             send_telegram_message(response["reply"])
     return jsonify({"status": "ok"})
+
 
 def handle_bot_message(message):
     message = message.strip()
