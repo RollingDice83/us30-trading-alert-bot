@@ -7,14 +7,25 @@ app = Flask(__name__)
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
+@app.route("/")
+def home():
+    return "Telegram Alert Bot is running."
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json()
-    if not data or "message" not in data:
-        return "Invalid payload", 400
+    # Versuche, JSON zu parsen
+    data = request.get_json(silent=True)
+    message = ""
 
-    message = data["message"]
-    print("✅ Webhook POST empfangen:", message)  # <––– Debug-Zeile
+    if data and "message" in data:
+        message = data["message"]
+    else:
+        # Falls kein JSON oder kein "message"-Key vorhanden:
+        try:
+            message = request.data.decode("utf-8")
+        except:
+            message = "🚨 Alarm empfangen (aber kein lesbarer Inhalt)."
+
     send_telegram_message(message)
     return "OK", 200
 
