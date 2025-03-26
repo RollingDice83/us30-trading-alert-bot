@@ -13,7 +13,7 @@ CHAT_ID = '805285674'
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {'chat_id': CHAT_ID, 'text': text}
+    payload = {'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'Markdown'}
     requests.post(url, json=payload)
 
 # Hilfsfunktionen
@@ -31,6 +31,7 @@ def parse_signal(message):
         'liquidity': False,
         'bos': False,
         'fvg': False,
+        'text': message,
         'time': datetime.datetime.utcnow().isoformat()
     }
 
@@ -122,13 +123,35 @@ def webhook():
     signal = parse_signal(message)
     score = calculate_signal_score(signal)
 
-    if score >= 5 and signal['entry']:
+    if signal['entry'] and signal['direction']:
         active_setups.append(signal)
         response = build_bot_response(signal, score)
         send_telegram_message(response)
         return jsonify({'status': 'sent', 'score': score}), 200
     else:
-        return jsonify({'status': 'ignored', 'score': score}), 200
+        send_telegram_message(f"🟢 Nachricht erhalten: {message}")
+        return jsonify({'status': 'echoed'}), 200
+
+@app.route('/status', methods=['GET'])
+def status():
+    if not active_setups:
+        send_telegram_message("📭 Keine aktiven Setups gefunden.")
+        return jsonify({'status': 'no setups'}), 200
+
+    text = "\n🗂 *Aktive US30 Setups:*\n"
+    for idx, setup in enumerate(active_setups, start=1):
+        text += f"#{idx} – {setup['direction'].capitalize()} @ {setup['entry']}"
+        if setup['tp']:
+            text += f" | TP: {setup['tp']}"
+        if setup['sl']:
+            text += f" | SL: {setup['sl']}"
+        if setup['type']:
+            text += f" | Typ: {setup['type'].capitalize()}"
+        if setup['rsi']:
+            text += f" | RSI: {setup['rsi']}"
+        text += f"\n"
+    send_telegram_message(text)
+    return jsonify({'status': 'sent', 'setups': len(active_setups)}), 200
 
 @app.route('/help', methods=['GET'])
 def help():
