@@ -60,7 +60,9 @@ def telegram_webhook():
 
     message = data["message"].get("text")
     if message:
-        handle_bot_message(message.strip())
+        response = handle_bot_message(message.strip())
+        if isinstance(response, dict) and "reply" in response:
+            send_telegram_message(response["reply"])
     return jsonify({"status": "ok"})
 
 def handle_bot_message(message):
@@ -72,19 +74,15 @@ def handle_bot_message(message):
         return {"reply": send_status()}
     if message.startswith("/reset"):
         active_setups.clear()
-        send_telegram_message("✅ Alle aktiven Setups wurden zurückgesetzt.")
-        return {"status": "reset"}
+        return {"reply": "✅ Alle aktiven Setups wurden zurückgesetzt."}
 
     # Setup erkannt
     signal = parse_signal(message)
     active_setups.append(signal)
-    send_telegram_message(
-        f"📌 Neues US30 Setup erkannt\n➡️ Richtung: {signal['direction']}\n🎯 Entry: {signal['entry']}\n🎯 TP: {signal['tp']}\n🛑 SL: {signal['sl']}\n🎯 Entry-Typ: {signal['type']}\n📊 RSI: {signal['rsi']}\n📈 Momentum: {signal['momentum']}\n⚙️ Signalqualität: {signal['score']}/10"
-    )
-    return {"status": "received", "score": signal["score"]}
+    return {"reply": f"📌 Neues US30 Setup erkannt\n➡️ Richtung: {signal['direction']}\n🎯 Entry: {signal['entry']}\n🎯 TP: {signal['tp']}\n🛑 SL: {signal['sl']}\n🎯 Entry-Typ: {signal['type']}\n📊 RSI: {signal['rsi']}\n📈 Momentum: {signal['momentum']}\n⚙️ Signalqualität: {signal['score']}/10"}
 
 def send_help():
-    help_text = """
+    return """
 🤖 *US30 Trading Bot Hilfe*
 
 Verfügbare Befehle:
@@ -97,18 +95,14 @@ Du kannst auch direkt Signale posten:
 "take partial profit"
 "move SL to 42600"
     """
-    send_telegram_message(help_text)
-    return "ok"
 
 def send_status():
     if not active_setups:
-        send_telegram_message("🚫 Keine aktiven Setups.")
-        return "leer"
+        return "🚫 Keine aktiven Setups."
     msg = "📊 Aktive US30 Setups:\n"
     for i, s in enumerate(active_setups, 1):
         msg += f"{i}) {s['direction']} @ {s['entry']} | TP {s['tp']} | SL {s['sl']}\n"
-    send_telegram_message(msg)
-    return "ok"
+    return msg
 
 @app.route("/")
 def index():
