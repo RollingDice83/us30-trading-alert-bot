@@ -1,18 +1,19 @@
 from flask import Flask, request, jsonify
 import requests
 import json
-import yfinance as yf
-import threading
-import time
 import os
 
 app = Flask(__name__)
 
-# Telegram Bot Token & Chat ID from Environment Variables
+# ✅ Telegram Bot Token & Chat ID from Environment Variables
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 TELEGRAM_WEBHOOK_PATH = "/telegram"
+
+# 🛠️ Debug-Logging zur Sicherheit
+print("🛠️ TELEGRAM_TOKEN geladen:", TELEGRAM_TOKEN is not None)
+print("🛠️ TELEGRAM_CHAT_ID geladen:", TELEGRAM_CHAT_ID)
 
 # Speicher für aktive Setups
 active_setups = []
@@ -66,9 +67,6 @@ def telegram_webhook():
         print("❌ Fehler beim Verarbeiten:", str(e))
         return jsonify({"status": "invalid"}), 400
 
-
-    print("🔔 Telegram Webhook-Eingang:", json.dumps(data, indent=2))
-
     if not data or "message" not in data:
         return jsonify({"status": "no message"}), 400
 
@@ -78,7 +76,6 @@ def telegram_webhook():
         if isinstance(response, dict) and "reply" in response:
             send_telegram_message(response["reply"])
     return jsonify({"status": "ok"})
-
 
 def handle_bot_message(message):
     message = message.strip()
