@@ -159,7 +159,7 @@ def webhook():
     if not data:
         return 'Invalid payload', 400
 
-    message = data.get('message')
+    message = data.get('message') or data.get('text')
     if not message:
         return 'Missing message', 400
 
