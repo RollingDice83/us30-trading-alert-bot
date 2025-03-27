@@ -2,20 +2,22 @@ from flask import Flask, request, jsonify
 import os
 import requests
 import re
+import threading
+import time
 
 app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Speicher für aktive Positionen
 active_trades = []
+auto_analysis_interval = 30  # in Minuten
+analysis_thread_active = False
 
-# Hilfsfunktionen
+# --- Hilfsfunktionen ---
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    requests.post(url, json=payload)
+    requests.post(url, json={"chat_id": chat_id, "text": text})
 
 def parse_trade_command(text):
     pattern = r"/trade(?=.*\b(?P<symbol>\w+)\b)(?=.*\b(?P<direction>long|short)\b)(?=.*\b(?P<entry>\d+(?:\.\d+)?)\b)(?:.*?SL=(?P<sl>\d+(?:\.\d+)?))?(?:.*?TP=(?P<tp>\d+(?:\.\d+)?))?(?:.*?score=(?P<score>\d+))?(?:.*?tag=(?P<tag>[^\n]+))?"
@@ -33,6 +35,11 @@ def parse_trade_command(text):
         "tag": data["tag"].strip() if data["tag"] else ""
     }
 
+def parse_modify_command(text):
+    pattern = r"/modify\s+(?P<symbol>\w+)\s+(?P<entry>\d+(?:\.\d+)?)(?:.*?SL=(?P<sl>\d+(?:\.\d+)?))?(?:.*?TP=(?P<tp>\d+(?:\.\d+)?))?"
+    match = re.search(pattern, text, re.IGNORECASE)
+    return match.groupdict() if match else None
+
 def parse_close_command(text):
     if "/close all" in text:
         return "ALL", None, text.split()[-1] if len(text.split()) > 2 else ""
@@ -43,7 +50,11 @@ def parse_close_command(text):
     data = match.groupdict()
     return data["symbol"].upper(), float(data["entry"]), data["tag"] or ""
 
-# Handler-Funktionen
+def parse_analyze_command(text):
+    match = re.match(r"/analyze(?:\s+(?P<interval>\d+))?", text)
+    return int(match.group("interval")) if match and match.group("interval") else None
+
+# --- Hauptfunktionen ---
 def handle_trade_command(user_text, chat_id):
     result = parse_trade_command(user_text)
     if not result:
@@ -83,6 +94,30 @@ def handle_close_command(user_text, chat_id):
     else:
         send_message(chat_id, f"⚠️ Keine Position gefunden mit {symbol} bei {entry}.")
 
+def handle_modify_command(user_text, chat_id):
+    params = parse_modify_command(user_text)
+    if not params or not params["symbol"] or not params["entry"]:
+        send_message(chat_id, "❌ Beispiel: /modify US30 42650 SL=42500 TP=43000")
+        return
+
+    symbol = params["symbol"].upper()
+    entry = float(params["entry"])
+    modified = False
+
+    for trade in active_trades:
+        if trade["symbol"] == symbol and trade["entry"] == entry:
+            if params["sl"]:
+                trade["sl"] = float(params["sl"])
+                modified = True
+            if params["tp"]:
+                trade["tp"] = float(params["tp"])
+                modified = True
+
+    if modified:
+        send_message(chat_id, f"🔧 Trade {symbol} bei {entry} angepasst.")
+    else:
+        send_message(chat_id, f"⚠️ Keine passende Position gefunden.")
+
 def handle_status(chat_id):
     if not active_trades:
         send_message(chat_id, "📊 Keine offenen Positionen.")
@@ -97,6 +132,28 @@ def handle_status(chat_id):
         if trade['tag']: msg += f" – {trade['tag']}"
         msg += "\n"
     send_message(chat_id, msg)
+
+# --- Analysefunktionen (MOCK) ---
+def get_mock_rsi():
+    return 28
+
+def check_mock_structure():
+    return True
+
+def perform_analysis():
+    rsi = get_mock_rsi()
+    mss_break = check_mock_structure()
+
+    if rsi < 30 and mss_break:
+        send_message(TELEGRAM_CHAT_ID, "📊 SIGNAL: RSI < 30 + MSS Break erkannt!\n✅ Score: 80")
+
+# --- Auto-Analyse Scheduler ---
+def analysis_scheduler():
+    global analysis_thread_active
+    analysis_thread_active = True
+    while analysis_thread_active:
+        perform_analysis()
+        time.sleep(auto_analysis_interval * 60)
 
 @app.route("/")
 def index():
@@ -118,11 +175,24 @@ def telegram_webhook():
     if user_text.startswith("/status"):
         handle_status(chat_id)
     elif user_text.startswith("/help"):
-        send_message(chat_id, "📘 Befehle:\n/status – zeigt offenen Trades\n/trade – sendet Trade-Setup\n/close – Position schließen (/close all, /close all long, etc.)\n/help – Hilfe anzeigen")
+        send_message(chat_id, "📘 Befehle:\n/status – zeigt offenen Trades\n/trade – sendet Trade-Setup\n/close – Position schließen (/close all, /close all long, etc.)\n/modify – SL/TP anpassen\n/analyze [optional: Intervall in Minuten] – Marktanalyse starten\n/help – Hilfe anzeigen")
     elif user_text.startswith("/trade"):
         handle_trade_command(user_text, chat_id)
     elif user_text.startswith("/close"):
         handle_close_command(user_text, chat_id)
+    elif user_text.startswith("/modify"):
+        handle_modify_command(user_text, chat_id)
+    elif user_text.startswith("/analyze"):
+        global auto_analysis_interval, analysis_thread_active
+        interval = parse_analyze_command(user_text)
+        if interval:
+            auto_analysis_interval = interval
+            send_message(chat_id, f"🔁 Analyse-Intervall auf {interval} Minuten gesetzt.")
+        if not analysis_thread_active:
+            threading.Thread(target=analysis_scheduler, daemon=True).start()
+            send_message(chat_id, "📊 Automatische Marktanalyse gestartet.")
+        else:
+            perform_analysis()
     else:
         send_message(chat_id, "❓ Unbekannter Befehl.")
 
