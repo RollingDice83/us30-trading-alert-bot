@@ -1,43 +1,75 @@
-from flask import Flask, request
+# app.py
 import os
-import requests
+from flask import Flask, request
+import json
+from utils import evaluate_entry_score, parse_trade_command
 
 app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-@app.route('/')
-def home():
-    return "US30 Telegram Bot is running."
+from telegram import Bot
+bot = Bot(token=TELEGRAM_TOKEN)
 
-@app.route('/telegram', methods=['POST'])
+positions = {}  # Dict: {tag/entry: {"type": ..., "sl": ..., "tp": ..., "score": ...}}
+
+def send_message(text):
+    if TELEGRAM_CHAT_ID:
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
+
+@app.route("/telegram", methods=["POST"])
 def telegram_webhook():
-    if request.method == 'POST':
-        data = request.get_json()
+    data = request.json
+    message = data.get("message", {}).get("text", "")
 
-        if "message" in data:
-            chat_id = data["message"]["chat"]["id"]
-            message = data["message"].get("text", "")
+    if message.startswith("/trade"):
+        trade_info = parse_trade_command(message)
+        if trade_info:
+            score, reasons = evaluate_entry_score(trade_info)
+            tag = trade_info.get("entry")
+            trade_info["score"] = score
+            trade_info["reasons"] = reasons
+            positions[tag] = trade_info
 
-            if message.lower() == "/start" or message.lower() == "/help":
-                send_message(chat_id, "📘 Befehle:\n/status – zeigt den aktuellen Bot-Status\n/trade – sendet Trade-Setup\n/close – Position schließen\n/help – Hilfe anzeigen")
-            elif message.lower() == "/status":
-                send_message(chat_id, "✅ Der US30-Bot läuft und empfängt Signale.")
-            elif message.lower() == "/close":
-                send_message(chat_id, "❌ Bitte gib die Position an, die du schließen willst. Beispiel:\n/close 42,650")
-            elif message.lower().startswith("/trade"):
-                send_message(chat_id, "📈 Trade-Signal erkannt. Details werden analysiert... (Demo-Modus)")
+            msg = f"📊 Entry Score für {tag} ({trade_info['type'].upper()}): {score}/100\n"
+            for reason in reasons:
+                msg += f"- {reason}\n"
+            msg += f"\nVorschlag: SL {trade_info['sl']} | TP {trade_info['tp']}"
+            send_message(msg)
+        else:
+            send_message("❌ Ungültiges Format. Beispiel: /trade 42650 long SL:42500 TP:42800")
 
-        return {"status": "ok"}, 200
+    elif message.startswith("/close"):
+        parts = message.split()
+        if len(parts) >= 2:
+            tag = parts[1]
+            percent = 100
+            if len(parts) == 3 and "%" in parts[2]:
+                percent = int(parts[2].replace("%", ""))
 
-def send_message(chat_id, text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text
-    }
-    requests.post(url, json=payload)
+            if tag in positions:
+                pos = positions[tag]
+                send_message(f"📉 {percent}% von {tag} ({pos['type'].upper()}) geschlossen.")
+                if percent == 100:
+                    del positions[tag]
+            else:
+                send_message(f"⚠️ Keine offene Position mit Tag {tag} gefunden.")
+        else:
+            send_message("❌ Bitte gib die Position an, die du schließen willst. Beispiel: /close 42650 50%")
 
-if __name__ == '__main__':
-    app.run(debug=True)
+    elif message.startswith("/status"):
+        send_message("✅ Der US30-Bot läuft und empfängt Signale.")
+
+    elif message.startswith("/help"):
+        send_message("""📘 Befehle:
+/status – zeigt den aktuellen Bot-Status
+/trade – sendet Trade-Setup (inkl. Score)
+/close – Position (teilweise) schließen
+/help – Hilfe anzeigen""")
+
+    return "ok"
+
+@app.route("/")
+def index():
+    return "US30 Trading Bot läuft."
