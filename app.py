@@ -18,8 +18,8 @@ def send_message(chat_id, text):
     requests.post(url, json=payload)
 
 def parse_trade_command(text):
-    pattern = r"/trade (?P<symbol>\w+) (?P<direction>long|short) (?P<entry>\d+(?:\.\d+)?) ?(?:SL=(?P<sl>\d+(?:\.\d+)?))? ?(?:TP=(?P<tp>\d+(?:\.\d+)?))? ?(?:score=(?P<score>\d+))? ?(?:tag=(?P<tag>.+))?"
-    match = re.match(pattern, text, re.IGNORECASE)
+    pattern = r"/trade(?=.*\b(?P<symbol>\w+)\b)(?=.*\b(?P<direction>long|short)\b)(?=.*\b(?P<entry>\d+(?:\.\d+)?)\b)(?:.*?SL=(?P<sl>\d+(?:\.\d+)?))?(?:.*?TP=(?P<tp>\d+(?:\.\d+)?))?(?:.*?score=(?P<score>\d+))?(?:.*?tag=(?P<tag>[^\n]+))?"
+    match = re.search(pattern, text, re.IGNORECASE)
     if not match:
         return None
     data = match.groupdict()
