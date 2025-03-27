@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import os
 import requests
+import re
 
 app = Flask(__name__)
 
@@ -14,75 +15,38 @@ def send_message(chat_id, text):
     requests.post(url, json=payload)
 
 def parse_trade_command(text):
-    parts = text.split()
-    if len(parts) < 4:
+    pattern = r"/trade (\w+) (long|short) (\d+(?:\.\d+)?) SL=(\d+(?:\.\d+)?) TP=(\d+(?:\.\d+)?) score=(\d+) tag=(.+)"
+    match = re.match(pattern, text, re.IGNORECASE)
+    if not match:
         return None
-    try:
-        entry = float(parts[1].replace(',', '.'))
-        sl = float(parts[2].replace(',', '.'))
-        tp = float(parts[3].replace(',', '.'))
-        return entry, sl, tp
-    except ValueError:
-        return None
-
-def evaluate_trade_score(entry, sl, tp):
-    try:
-        risk = abs(entry - sl)
-        reward = abs(tp - entry)
-        if risk == 0:
-            return 0, "Ungültiges Setup – SL ist gleich Entry."
-        crv = reward / risk
-
-        score = 50
-
-        if crv > 2:
-            score += 30
-        elif crv > 1.5:
-            score += 15
-        elif crv < 1:
-            score -= 15
-
-        if reward > 100:
-            score += 10
-        elif reward > 50:
-            score += 5
-
-        if risk > 150:
-            score -= 10
-        elif risk < 20:
-            score += 5
-
-        reason = f"CRV: {crv:.2f}, Risiko: {risk:.1f} Punkte, Ziel: {reward:.1f} Punkte"
-        return max(0, min(100, score)), reason
-    except Exception as e:
-        return 0, f"Fehler bei der Bewertung: {str(e)}"
+    symbol, direction, entry, sl, tp, score, tag = match.groups()
+    return symbol.upper(), direction.lower(), float(entry), float(sl), float(tp), int(score), tag.strip()
 
 def parse_close_command(text):
-    try:
-        parts = text.split()
-        entry = float(parts[1].replace(',', '.'))
-        percent = float(parts[2]) if len(parts) > 2 else 100
-        return entry, percent
-    except:
-        return None, None
+    pattern = r"/close (\w+) (\d+(?:\.\d+)?)(?: (\w+))?"
+    match = re.match(pattern, text, re.IGNORECASE)
+    if not match:
+        return None, None, None
+    symbol, entry, tag = match.groups()
+    return symbol.upper(), float(entry), tag or ""
 
 # Handler-Funktionen
 def handle_trade_command(user_text, chat_id):
     result = parse_trade_command(user_text)
     if not result:
-        send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade 42650 42500 43000")
+        send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade US30 long 42650 SL=42500 TP=43000 score=80 tag=Breakout")
         return
 
-    entry, sl, tp = result
-    score, info = evaluate_trade_score(entry, sl, tp)
-    send_message(chat_id, f"📊 Trade-Analyse:\nEntry: {entry}\nSL: {sl}\nTP: {tp}\nScore: {score}/100\n🔍 {info}")
+    symbol, direction, entry, sl, tp, score, tag = result
+    msg = f"📥 Neuer Trade-Eingang\n🔹 Symbol: {symbol}\n🔹 Richtung: {direction}\n🔹 Entry: {entry}\n🔹 SL: {sl}\n🔹 TP: {tp}\n🔹 Score: {score}/100\n🔹 Tag: {tag}"
+    send_message(chat_id, msg)
 
 def handle_close_command(user_text, chat_id):
-    entry, percent = parse_close_command(user_text)
-    if entry is None:
-        send_message(chat_id, "❌ Bitte gib die Position an, die du schließen willst. Beispiel: /close 42650 [optional %]")
+    symbol, entry, tag = parse_close_command(user_text)
+    if not symbol:
+        send_message(chat_id, "❌ Bitte gib die Position an, die du schließen willst. Beispiel: /close US30 42650 profit")
     else:
-        send_message(chat_id, f"💼 Position bei {entry} wird zu {percent}% geschlossen. (Demo-Modus)")
+        send_message(chat_id, f"💼 Position {symbol} bei {entry} wird geschlossen. Tag: {tag}")
 
 @app.route("/")
 def index():
