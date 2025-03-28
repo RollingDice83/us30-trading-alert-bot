@@ -11,19 +11,78 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Speicher
 active_trades = []
-auto_check_interval = 30  # in Minuten
+auto_check_thread = None
+auto_check_interval = None
+auto_check_active = False
 
-# Telegram senden
+# Telegram Nachricht senden
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    requests.post(url, json=payload)
+    requests.post(url, json={"chat_id": chat_id, "text": text})
 
-# Trade-Parsing
+# RSI berechnen (1H, Yahoo)
+def fetch_rsi(symbol="^DJI", interval="1h", period=14):
+    data = yf.download(symbol, period="7d", interval=interval, progress=False)
+    if data.empty or len(data["Close"]) < period:
+        return None
+    delta = data["Close"].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return round(rsi.iloc[-1], 2)
+
+# Analyze ausführen
+def handle_analyze(chat_id):
+    rsi = fetch_rsi()
+    if rsi is None:
+        send_message(chat_id, "⚠️ Konnte RSI nicht abrufen.")
+        return
+    if rsi < 30:
+        send_message(chat_id, f"📉 RSI Alert US30 (1H): {rsi} < 30 – Watch für LONG-Möglichkeit")
+    elif rsi > 70:
+        send_message(chat_id, f"📈 RSI Alert US30 (1H): {rsi} > 70 – Watch für SHORT-Möglichkeit")
+    else:
+        send_message(chat_id, f"ℹ️ RSI US30 (1H): {rsi} – Kein Extremwert")
+
+# Auto-Check als Thread
+def auto_analyze_loop(interval):
+    global auto_check_active
+    while auto_check_active:
+        handle_analyze(TELEGRAM_CHAT_ID)
+        time.sleep(interval * 60)
+
+# Analyze Trigger Handler
+def handle_analyze_command(user_text, chat_id):
+    global auto_check_active, auto_check_thread, auto_check_interval
+
+    if user_text.strip() == "/analyze":
+        handle_analyze(chat_id)
+        return
+
+    if user_text.startswith("/analyze on"):
+        try:
+            minutes = int(user_text.split()[2])
+            auto_check_interval = minutes
+            auto_check_active = True
+            auto_check_thread = threading.Thread(target=auto_analyze_loop, args=(minutes,), daemon=True)
+            auto_check_thread.start()
+            send_message(chat_id, f"⏱️ Auto-Analyse aktiviert: alle {minutes} Minuten.")
+        except:
+            send_message(chat_id, "⚠️ Fehler beim Starten der Auto-Analyse. Nutze: /analyze on 30")
+        return
+
+    if user_text.startswith("/analyze off"):
+        auto_check_active = False
+        send_message(chat_id, "🛑 Auto-Analyse deaktiviert.")
+        return
+
+# Trade-Befehl parsen
 def parse_trade_command(text):
-    pattern = r"/trade(?=.*\b(?P<symbol>\w+)\b)(?=.*\b(?P<direction>long|short)\b)(?=.*\b(?P<entry>\d+(?:\.\d+)?)\b)(?:.*?SL=(?P<sl>\d+(?:\.\d+)?|manual|none))?(?:.*?TP=(?P<tp>\d+(?:\.\d+)?|open|none))?(?:.*?score=(?P<score>\d+))?(?:.*?tag=(?P<tag>[^\n]+))?"
+    pattern = r"/trade(?=.*\b(?P<symbol>\w+)\b)(?=.*\b(?P<direction>long|short)\b)(?=.*\b(?P<entry>\d+(?:\.\d+)?)\b)(?:.*?SL=(?P<sl>\d+(?:\.\d+)?))?(?:.*?TP=(?P<tp>\d+(?:\.\d+)?))?(?:.*?score=(?P<score>\d+))?(?:.*?tag=(?P<tag>[^\n]+))?"
     match = re.search(pattern, text, re.IGNORECASE)
     if not match:
         return None
@@ -32,8 +91,8 @@ def parse_trade_command(text):
         "symbol": data["symbol"].upper(),
         "direction": data["direction"].lower(),
         "entry": float(data["entry"]),
-        "sl": data["sl"] if data["sl"] not in [None, ""] else None,
-        "tp": data["tp"] if data["tp"] not in [None, ""] else None,
+        "sl": float(data["sl"]) if data["sl"] else None,
+        "tp": float(data["tp"]) if data["tp"] else None,
         "score": int(data["score"]) if data["score"] else None,
         "tag": data["tag"].strip() if data["tag"] else ""
     }
@@ -48,32 +107,7 @@ def parse_close_command(text):
     data = match.groupdict()
     return data["symbol"].upper(), float(data["entry"]), data["tag"] or ""
 
-# RSI-Abfrage
-def get_rsi(ticker="^DJI", interval="60m", period="14"):
-    df = yf.download(tickers=ticker, interval=interval, period="1d")
-    if df.empty or len(df) < int(period):
-        return None
-    delta = df["Close"].diff()
-    gain = delta.clip(lower=0).rolling(window=int(period)).mean()
-    loss = -delta.clip(upper=0).rolling(window=int(period)).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi.iloc[-1], 2)
-
-# AUTO CHECK TASK
-def auto_check_loop():
-    while True:
-        try:
-            rsi = get_rsi()
-            if rsi and rsi < 30:
-                send_message(TELEGRAM_CHAT_ID, f"📉 RSI-Alarm US30: {rsi} (unter 30!) – Check auf Long-Setup!")
-        except Exception as e:
-            print("Auto-Check-Fehler:", e)
-        time.sleep(auto_check_interval * 60)
-
-threading.Thread(target=auto_check_loop, daemon=True).start()
-
-# Handler
+# Trade Command Handler
 def handle_trade_command(user_text, chat_id):
     result = parse_trade_command(user_text)
     if not result:
@@ -83,14 +117,14 @@ def handle_trade_command(user_text, chat_id):
     msg = f"📥 Neuer Trade-Eingang\n🔹 Symbol: {result['symbol']}\n🔹 Richtung: {result['direction']}\n🔹 Entry: {result['entry']}"
     if result['sl']: msg += f"\n🔹 SL: {result['sl']}"
     if result['tp']: msg += f"\n🔹 TP: {result['tp']}"
-    if result['score'] is not None: msg += f"\n🔹 Score: {result['score']}/100"
+    if result['score']: msg += f"\n🔹 Score: {result['score']}/100"
     if result['tag']: msg += f"\n🔹 Tag: {result['tag']}"
     send_message(chat_id, msg)
 
 def handle_close_command(user_text, chat_id):
     symbol, entry, tag = parse_close_command(user_text)
     if not symbol:
-        send_message(chat_id, "❌ Beispiel: /close US30 42650 profit oder /close all")
+        send_message(chat_id, "❌ Bitte gib die Position an, die du schließen willst. Beispiel: /close US30 42650 profit")
         return
     global active_trades
     if symbol == "ALL":
@@ -124,25 +158,6 @@ def handle_status(chat_id):
         msg += "\n"
     send_message(chat_id, msg)
 
-def handle_batch(text, chat_id):
-    lines = text.strip().split("\n")
-    count = 0
-    for line in lines:
-        match = re.match(r"(LONG|SHORT)\s*\|\s*(\d(?:\.\d+)?)\s*lot\s*@\s*(\d+(?:\.\d+)?)\s*\|\s*TP:\s*(\w+)?\s*\|\s*SL:\s*(\w+)?\s*\|\s*Tag:\s*(.*)", line.strip(), re.IGNORECASE)
-        if match:
-            direction, lot, entry, tp, sl, tag = match.groups()
-            active_trades.append({
-                "symbol": "US30",
-                "direction": direction.lower(),
-                "entry": float(entry),
-                "tp": tp if tp.lower() != "none" else None,
-                "sl": sl if sl.lower() != "none" else None,
-                "score": None,
-                "tag": tag.strip()
-            })
-            count += 1
-    send_message(chat_id, f"✅ {count} Batch-Trades gespeichert.")
-
 @app.route("/")
 def index():
     return "US30-Bot läuft ✅"
@@ -152,40 +167,22 @@ def telegram_webhook():
     data = request.get_json()
     if not data:
         return jsonify({"status": "error", "message": "Kein JSON erhalten"}), 400
-
     message = data.get("message", {})
     if not message:
         return jsonify({"status": "ok"}), 200
-
     user_text = message.get("text", "")
     chat_id = message["chat"]["id"]
 
     if user_text.startswith("/status"):
         handle_status(chat_id)
     elif user_text.startswith("/help"):
-        send_message(chat_id, "📘 Befehle:\n/status\n/trade SYMBOL long 42500 SL=42250 TP=43000\n/close 42500 oder /close all\n/batch [mehrere Trades]\n/analyze\n/interval 15")
+        send_message(chat_id, "📘 Befehle:\n/status\n/trade\n/close\n/analyze [on <min> | off]\n/help")
     elif user_text.startswith("/trade"):
         handle_trade_command(user_text, chat_id)
     elif user_text.startswith("/close"):
         handle_close_command(user_text, chat_id)
     elif user_text.startswith("/analyze"):
-        rsi = get_rsi()
-        if rsi:
-            msg = f"📊 RSI US30 (1H): {rsi}"
-            if rsi < 30:
-                msg += " ⚠️ Unter 30 – Watch für Long!"
-            send_message(chat_id, msg)
-    elif user_text.startswith("/interval"):
-        try:
-            global auto_check_interval
-            minutes = int(user_text.split()[1])
-            auto_check_interval = minutes
-            send_message(chat_id, f"⏱️ Intervall für Auto-Check gesetzt: alle {minutes} Minuten.")
-        except:
-            send_message(chat_id, "❌ Beispiel: /interval 30")
-    elif user_text.startswith("/batch"):
-        handle_batch(user_text.replace("/batch", "").strip(), chat_id)
+        handle_analyze_command(user_text, chat_id)
     else:
         send_message(chat_id, "❓ Unbekannter Befehl.")
-
     return jsonify({"status": "ok"}), 200
