@@ -116,17 +116,23 @@ def handle_batch(text, chat_id):
     for line in lines:
         if line.strip().upper().startswith("LONG") or line.strip().upper().startswith("SHORT"):
             try:
-                parts = line.split("|")
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) < 4:
+                    continue
                 direction = parts[0].strip().lower()
                 lot = float(parts[1].split()[0])
-                entry = float(re.search(r"@(\d+(?:\.\d+)?)", parts[1]).group(1))
+                entry_match = re.search(r"@(\d+(?:\.\d+)?)", parts[1])
                 tp_match = re.search(r"TP: (\d+(?:\.\d+)?)", parts[2])
-                tp = float(tp_match.group(1)) if tp_match else "open"
                 sl = parts[3].split(":")[-1].strip()
                 tag = parts[4].split(":")[-1].strip() if len(parts) > 4 else "n/a"
+
+                if not entry_match:
+                    continue
+                entry = float(entry_match.group(1))
+                tp = float(tp_match.group(1)) if tp_match else "open"
+
                 trades.append({"direction": direction, "lot": lot, "entry": entry, "tp": tp, "sl": sl, "tag": tag})
-            except Exception as e:
-                print("Batch Parse Error:", e)
+            except:
                 continue
     if trades:
         active_trades.extend(trades)
