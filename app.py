@@ -154,33 +154,43 @@ def handle_zones(chat_id):
 
 # 🔹 /batch Handler
 def handle_batch(text, chat_id):
+    global active_trades
     lines = text.split("\n")
     count = 0
-    for l in lines:
-        if "|" not in l:
+    for line in lines:
+        line = line.strip()
+        if not line or "|" not in line:
             continue
-        parts = l.split("|")
-        if len(parts) < 2:
+        try:
+            direction, rest = line.split("|", 1)
+            direction = direction.strip().upper()
+            parts = [p.strip() for p in rest.split("|")]
+            lot = float(re.search(r"([\d.]+)", parts[0]).group(1))
+            entry = float(re.search(r"@ ([\d.]+)", parts[0]).group(1))
+            tp_match = re.search(r"TP: ([\d.]+)", parts[1]) if len(parts) > 1 else None
+            tp = float(tp_match.group(1)) if tp_match else None
+            sl_match = re.search(r"SL: ([\d.]+)", parts[1]) if len(parts) > 1 else None
+            sl = float(sl_match.group(1)) if sl_match else None
+            tag = parts[2].replace("Tag:", "").strip() if len(parts) > 2 else ""
+            symbol = "US30"
+
+            active_trades.append({
+                "symbol": symbol,
+                "direction": direction.lower(),
+                "entry": entry,
+                "tp": tp,
+                "sl": sl,
+                "lot": lot,
+                "tag": tag,
+                "score": None
+            })
+            count += 1
+        except Exception as e:
+            print(f"⚠️ Fehler beim Parsen der Zeile: {line} – {e}")
             continue
-        direction = parts[0].strip().lower()
-        lot = detect_lot_size(parts[1])
-        entry = float(re.search(r"@ (\d+(?:\.\d+)?)", parts[1]).group(1))
-        tp = float(re.search(r"TP: (\d+(?:\.\d+)?)", parts[2]).group(1)) if "TP:" in parts[2] else None
-        sl = float(re.search(r"SL: (\d+(?:\.\d+)?)", parts[2]).group(1)) if "SL:" in parts[2] else None
-        tag = parts[-1].replace("Tag:", "").strip()
-        trade = {
-            "symbol": "US30",
-            "direction": direction,
-            "entry": entry,
-            "tp": tp,
-            "sl": sl,
-            "score": None,
-            "tag": tag,
-            "lot": lot
-        }
-        active_trades.append(trade)
-        count += 1
-    send_message(chat_id, f"✅ {count} Batch-Trades gespeichert.")
+
+    send_message(chat_id, f"📥 {count} Trades hinzugefügt über /batch.")
+
 
 # 🔹 Webhook Endpoint
 @app.route("/telegram", methods=["POST"])
