@@ -2,10 +2,12 @@ import json
 import re
 import time
 from flask import Flask, request, jsonify
+import os
+import sys
 
 app = Flask(__name__)
 
-VERSION = "v4.1.2"
+VERSION = "v4.2"
 
 active_trades = []
 signal_memory = []
@@ -193,6 +195,7 @@ def format_signals():
 
 def parse_signal(text):
     signal_patterns = [
+        r"rsi\s*(\d+)",
         r"rsi.*?(\d+\.\d+)",
         r"momentum.*?(bullish|bearish)",
         r"mss.*?(bullish|bearish).*?break"
@@ -203,4 +206,9 @@ def parse_signal(text):
     return None
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    try:
+        port = int(os.environ.get("PORT", 5000))
+        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    except Exception as e:
+        print(f"❌ Fehler beim Starten des Servers: {e}", file=sys.stderr)
+        sys.exit(1)
