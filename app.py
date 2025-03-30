@@ -30,9 +30,12 @@ def detect_lot_size(tag):
     return 1.0
 
 # 🔹 Telegram Messaging
-def send_message(chat_id, text):
+def send_message(chat_id, text, parse_mode=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": text})
+    payload = {"chat_id": chat_id, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    requests.post(url, json=payload)
 
 # 🔹 STDV Zones
 def calculate_stdv_zones(opening_price):
@@ -126,17 +129,34 @@ def handle_status(chat_id):
     if not active_trades:
         send_message(chat_id, "📊 Keine offenen Positionen.")
         return
-    longs = sum(t["lot"] for t in active_trades if t["direction"] == "long")
-    shorts = sum(t["lot"] for t in active_trades if t["direction"] == "short")
-    msg = f"📈 Aktive Trades ({len(active_trades)}):\n🔹 Longs: {longs} Lot\n🔻 Shorts: {shorts} Lot\n\n"
-    for t in active_trades:
-        msg += f"• {t['symbol']} {t['direction']} @ {t['entry']} ({t['lot']} Lot)"
-        if t["tp"]: msg += f" → TP {t['tp']}"
-        if t["sl"]: msg += f", SL {t['sl']}"
-        if t["score"]: msg += f" (Score {t['score']})"
-        if t["tag"]: msg += f" – {t['tag']}"
+
+    longs = [t for t in active_trades if t["direction"] == "long"]
+    shorts = [t for t in active_trades if t["direction"] == "short"]
+
+    msg = "📈 *Offene Positionen*\n\n"
+
+    # Longs (grün)
+    if longs:
+        msg += f"🟢 *Longs* ({len(longs)}):\n"
+        for t in longs:
+            msg += f"• {t['lot']} lot @ {t['entry']}"
+            if t['tp']: msg += f" → TP {t['tp']}"
+            if t['sl']: msg += f", SL {t['sl']}"
+            if t['tag']: msg += f" – _{t['tag']}_"
+            msg += "\n"
         msg += "\n"
-    send_message(chat_id, msg)
+
+    # Shorts (rot)
+    if shorts:
+        msg += f"🔴 *Shorts* ({len(shorts)}):\n"
+        for t in shorts:
+            msg += f"• {t['lot']} lot @ {t['entry']}"
+            if t['tp']: msg += f" → TP {t['tp']}"
+            if t['sl']: msg += f", SL {t['sl']}"
+            if t['tag']: msg += f" – _{t['tag']}_"
+            msg += "\n"
+
+    send_message(chat_id, msg, parse_mode="Markdown")
 
 # 🔹 /zones Handler
 def handle_zones(chat_id):
