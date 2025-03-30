@@ -1,182 +1,189 @@
-# --- ANFANG: US30 Telegram Bot v4.0.1 ---
-
-from flask import Flask, request, jsonify
-import os, re, json, requests
-from datetime import datetime, timedelta
-import yfinance as yf
+from flask import Flask, request
+import json
+import re
+import datetime
 
 app = Flask(__name__)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
 active_trades = []
-signal_store_path = "us30_memory.json"
-context_store_path = "us30_context.json"
-version = "4.0.1"
+active_signals = []
+open_price = None
+version = "v4.0.1"
 
-# === Helper Functions ===
-
-def send_message(chat_id, text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": text})
-
-def save_json(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f)
-
-def load_json(path):
-    if not os.path.exists(path):
-        return {}
-    with open(path, "r") as f:
-        return json.load(f)
-
-def save_signals(signals):
-    save_json(signal_store_path, signals)
-
-def load_signals():
-    return load_json(signal_store_path) or []
-
-def reset_signals():
-    save_signals([])
-
-def get_opening_price():
-    context = load_json(context_store_path)
-    return float(context.get("open_price", 0))
-
-def set_opening_price(price):
-    context = load_json(context_store_path)
-    context["open_price"] = price
-    save_json(context_store_path, context)
-
-def fetch_open_price_yahoo():
-    try:
-        df = yf.download("^DJI", period="5d", interval="1h")
-        df = df[df.index.strftime("%H:%M") == "00:00"]
-        if not df.empty:
-            price = round(df.iloc[-1]["Open"], 2)
-            set_opening_price(price)
-            return price
-    except Exception as e:
-        print("Yahoo Price Error:", e)
-    return None
-
-def calc_stdv_zones(base):
-    return {f"{i:+d}%": round(base * (1 + i / 100), 2) for i in range(-5, 6)}
-
-def score_signals():
-    signals = load_signals()
-    now = datetime.utcnow()
-    active = [s for s in signals if datetime.strptime(s["time"], "%Y-%m-%dT%H:%M:%S") > now - timedelta(minutes=45)]
-    tags = [s["text"] for s in active]
-    score = 0
-    reasons = []
-    if any("RSI" in t and "<30" in t for t in tags):
-        score += 20
-        reasons.append("RSI < 30")
-    if any("Momentum: Bullish" in t for t in tags):
-        score += 25
-        reasons.append("Momentum bullish")
-    if any("MSS Bullish" in t for t in tags):
-        score += 30
-        reasons.append("MSS Bullish Break")
-    if any("Zone -2%" in t for t in tags):
-        score += 15
-        reasons.append("STDV -2% Pullback")
-    if any("crossing up" in t or "crossing down" in t for t in tags):
-        score += 10
-        reasons.append("Preis Break")
-    if len(reasons) >= 3:
-        score += 10
-    return score, reasons
-
-# === Command Handlers ===
-
-def handle_openprice(text, chat_id):
-    match = re.search(r"/openprice\s+(\d+(?:\.\d+)?)", text.lower())
-    if match:
-        price = float(match.group(1))
-        set_opening_price(price)
-        zones = calc_stdv_zones(price)
-        msg = "📊 STDV Zonen:\n"
-        for k, v in zones.items():
-            color = "🟥" if "-" in k else "🟩" if "+" in k else "🔵"
-            msg += f"{color} {k}: {v}\n"
-        send_message(chat_id, msg)
+# Farben für STDV-Ausgabe
+def colorize(value, base):
+    if value == base:
+        return f"\U0001F4C8 Opening: {value}"
+    elif value > base:
+        return f"\U0001F7E2 +{round((value-base)/base*100, 2)}%: {value}"
     else:
-        send_message(chat_id, "❌ Ungültiger /openprice-Befehl. Beispiel: /openprice 44100")
+        return f"\U0001F534 {round((value-base)/base*100, 2)}%: {value}"
 
-def handle_signal_push(data):
-    text = data.get("text", "").strip()
-    if any(k in text for k in ["RSI", "Momentum", "MSS", "Zone", "crossing"]):
-        signals = load_signals()
-        signals.append({"text": text, "time": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")})
-        save_signals(signals)
-        score, reasons = score_signals()
-        if score >= 70:
-            msg = f"📊 Signal-Vorschlag (Score {score}/100)\nUS30 Long\nEntry: TBD\nSL: TBD\nTP: TBD\n➕ {', '.join(reasons)}"
-            send_message(TELEGRAM_CHAT_ID, msg)
+# STDV-Zonen berechnen
+def get_zones():
+    if not open_price:
+        return "⚠️ Kein Opening Price gesetzt."
+    base = float(open_price)
+    zones = [colorize(round(base * (1 + i / 100), 2), base) for i in range(-5, 6)]
+    return "\n".join(zones)
 
-def handle_signals(text, chat_id):
-    signals = load_signals()
-    if not signals:
-        send_message(chat_id, "ℹ️ Keine aktiven Signale gespeichert.")
-    else:
-        msg = "📍 Aktive Signale:\n"
-        for s in signals[-10:]:
-            msg += f"• {s['text']} ({s['time'].split('T')[1]})\n"
-        score, reasons = score_signals()
-        msg += f"\n🧠 Aktueller Score: {score}/100\n➕ {', '.join(reasons)}"
-        send_message(chat_id, msg)
+# Signal hinzufügen
+def add_signal(text):
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    active_signals.append(f"{timestamp} - {text}")
 
-# === Webhook ===
+# /batch Parser
+def handle_batch(text):
+    lines = text.splitlines()
+    parsed = []
+    for line in lines:
+        if line.strip().startswith("LONG") or line.strip().startswith("SHORT"):
+            try:
+                direction = "LONG" if "LONG" in line else "SHORT"
+                lot = float(re.search(r"(\d+(\.\d+)?) lot", line).group(1))
+                entry = float(re.search(r"@ (\d+(\.\d+)?)", line).group(1))
+                tp_match = re.search(r"TP: ([\d\.]+)", line)
+                tp = float(tp_match.group(1)) if tp_match else None
+                sl_match = re.search(r"SL: ([\d\.]+)", line)
+                sl = float(sl_match.group(1)) if sl_match else None
+                tag_match = re.search(r"Tag: (\w+)", line)
+                tag = tag_match.group(1) if tag_match else ""
+                parsed.append({"dir": direction, "lot": lot, "entry": entry, "tp": tp, "sl": sl, "tag": tag})
+            except Exception as e:
+                print(f"Fehler beim Parsen einer Zeile: {line} Fehler: {e}")
+    return parsed
+
+@app.route("/", methods=["GET"])
+def home():
+    return "US30 Bot v4.0.1 running"
 
 @app.route("/telegram", methods=["POST"])
 def telegram():
     data = request.get_json()
     if not data or "message" not in data:
-        return jsonify({"status": "ignored"}), 200
-    msg = data["message"]
-    chat_id = msg["chat"]["id"]
-    text = msg.get("text", "").strip()
+        return "ok"
 
-    if text.lower().startswith("/openprice"):
-        handle_openprice(text, chat_id)
-    elif text.lower().startswith("/help"):
-        send_message(chat_id, f"📘 Befehle (v{version}):\n/openprice – STDV setzen\n/signals – akt. Signale\n/resetsignals – leeren\n/batch – Trades eintragen")
-    elif text.lower().startswith("/signals"):
-        handle_signals(text, chat_id)
-    elif text.lower().startswith("/resetsignals"):
-        reset_signals()
-        send_message(chat_id, "✅ Signal-Speicher gelöscht.")
-    elif text.lower().startswith("/batch"):
-        lines = text.splitlines()
-        parsed = []
-        for line in lines:
-            if not line.strip().upper().startswith("LONG") and not line.strip().upper().startswith("SHORT"):
-                continue
-            try:
-                pos = {
-                    "type": "LONG" if "LONG" in line.upper() else "SHORT",
-                    "lot": float(re.search(r"(\d+(\.\d+)?) lot", line).group(1)),
-                    "entry": float(re.search(r"@ (\d+(\.\d+)?)", line).group(1)),
-                    "tp": float(re.search(r"TP: (\d+(\.\d+)?)", line).group(1)) if "TP:" in line else None,
-                    "sl": re.search(r"SL: (\d+(\.\d+)?|manual)", line).group(1),
-                    "tag": re.search(r"Tag: ([\w ]+)", line).group(1)
-                }
-                parsed.append(pos)
-            except Exception as e:
-                print(f"Fehler beim Parsen einer Zeile: {line} Fehler: {e}")
+    chat_id = data["message"]["chat"]["id"]
+    text = data["message"].get("text", "")
+    response = ""
+
+    # Normalisiere Text
+    cmd = text.lower()
+
+    # Signaleingang (z. B. Momentum: Bullish 1h)
+    if any(x in text for x in ["Momentum:", "RSI", "MSS", "crossing"]):
+        add_signal(text)
+        return send(chat_id, f"✅ Signal empfangen: {text}")
+
+    if cmd.startswith("/help"):
+        response = f"📘 Befehle ({version}):\n"
+        response += "/status – offene Positionen\n"
+        response += "/trade – Setup senden\n"
+        response += "/close – Trade schließen\n"
+        response += "/update – STDV aktualisieren\n"
+        response += "/openprice – STDV Startpreis setzen\n"
+        response += "/zones – STDV Zonen anzeigen\n"
+        response += "/signals – aktuelle Signale\n"
+        response += "/resetsignals – Signal-Reset\n"
+        response += "/batch – mehrere Trades"
+
+    elif cmd.startswith("/openprice"):
+        try:
+            global open_price
+            open_price = float(re.findall(r"\d+\.?\d*", text)[0])
+            response = f"📈 Opening Price gesetzt: {open_price}\n\n{get_zones()}"
+        except:
+            response = "⚠️ Ungültiges Format. Beispiel: /openprice 44100"
+
+    elif cmd.startswith("/zones"):
+        response = get_zones()
+
+    elif cmd.startswith("/signals"):
+        if not active_signals:
+            response = "⚠️ Keine aktiven Signale."
+        else:
+            response = "\n".join(active_signals[-10:])
+
+    elif cmd.startswith("/resetsignals"):
+        active_signals.clear()
+        response = "♻️ Signal-Speicher geleert."
+
+    elif cmd.startswith("/batch"):
+        parsed = handle_batch(text)
         if parsed:
             active_trades.extend(parsed)
-            send_message(chat_id, f"✅ {len(parsed)} Position(en) hinzugefügt.")
+            response = f"✅ {len(parsed)} Trades übernommen."
         else:
-            send_message(chat_id, "⚠️ Keine gültigen Trades erkannt.")
+            response = "⚠️ Keine gültigen Trades erkannt."
+
+    elif cmd.startswith("/status"):
+        if not active_trades:
+            response = "📭 Keine aktiven Positionen."
+        else:
+            longs = [t for t in active_trades if t['dir'] == "LONG"]
+            shorts = [t for t in active_trades if t['dir'] == "SHORT"]
+            total_l = sum(t['lot'] for t in longs)
+            total_s = sum(t['lot'] for t in shorts)
+            response = f"📈 Offene Positionen\n\n🟢 Longs ({len(longs)} | {total_l} lot):"
+            for t in longs:
+                response += f"\n• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}"
+            response += f"\n\n🔴 Shorts ({len(shorts)} | {total_s} lot):"
+            for t in shorts:
+                response += f"\n• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}"
+
+    elif cmd.startswith("/trade"):
+        try:
+            dir_match = re.search(r"(long|short)", cmd)
+            entry_match = re.search(r"(\d{4,6})", cmd)
+            sl_match = re.search(r"sl=(\d+\.?\d*)", cmd)
+            tp_match = re.search(r"tp=(\d+\.?\d*)", cmd)
+            if dir_match and entry_match:
+                trade = {
+                    "dir": dir_match.group(1).upper(),
+                    "entry": float(entry_match.group(1)),
+                    "sl": float(sl_match.group(1)) if sl_match else None,
+                    "tp": float(tp_match.group(1)) if tp_match else None,
+                    "lot": 1.0,
+                    "tag": "manual"
+                }
+                active_trades.append(trade)
+                response = f"✅ Trade gespeichert: {trade['dir']} @ {trade['entry']}"
+            else:
+                response = "❌ Ungültiges Format. Beispiel: /trade long 42500 SL=42250 TP=43200"
+        except:
+            response = "⚠️ Fehler beim Speichern des Trades."
+
+    elif cmd.startswith("/close"):
+        entry = re.findall(r"\d+\.?\d*", cmd)
+        if not entry:
+            response = "❌ Bitte gib den Entry Preis an. Beispiel: /close 42500"
+        else:
+            e = float(entry[0])
+            before = len(active_trades)
+            active_trades[:] = [t for t in active_trades if t['entry'] != e]
+            after = len(active_trades)
+            if before == after:
+                response = "⚠️ Keine Position mit diesem Entry gefunden."
+            else:
+                response = f"✅ Position @ {e} geschlossen."
+
+    elif cmd.startswith("/update"):
+        if open_price:
+            response = f"♻️ STDV neu berechnet:\n{get_zones()}"
+        else:
+            response = "⚠️ Bitte zuerst /openprice setzen."
+
     else:
-        handle_signal_push(msg)
+        response = "❓ Unbekannter Befehl. Nutze /help für alle Optionen."
 
-    return jsonify({"status": "ok"}), 200
+    return send(chat_id, response)
 
-@app.route("/")
-def index():
-    return f"US30-Bot v{version} läuft ✅"
+# Antwort senden
+import requests
 
-# --- ENDE: US30 Telegram Bot v4.0.1 ---
+def send(chat_id, msg):
+    TOKEN = "<DEIN_BOT_TOKEN>"
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    data = {"chat_id": chat_id, "text": msg}
+    requests.post(url, json=data)
+    return "ok"
