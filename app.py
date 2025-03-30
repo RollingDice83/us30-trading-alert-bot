@@ -1,189 +1,154 @@
-from flask import Flask, request
 import json
 import re
-import datetime
+import requests
+from flask import Flask, request
+from datetime import datetime
 
 app = Flask(__name__)
 
+BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+VERSION = "v4.0.2"
 active_trades = []
-active_signals = []
+signal_memory = []
 open_price = None
-version = "v4.0.1"
 
-# Farben für STDV-Ausgabe
-def colorize(value, base):
-    if value == base:
-        return f"\U0001F4C8 Opening: {value}"
-    elif value > base:
-        return f"\U0001F7E2 +{round((value-base)/base*100, 2)}%: {value}"
-    else:
-        return f"\U0001F534 {round((value-base)/base*100, 2)}%: {value}"
+# --- Hilfsfunktionen ---
+def send_message(chat_id, text):
+    requests.post(TELEGRAM_API_URL, json={"chat_id": chat_id, "text": text})
 
-# STDV-Zonen berechnen
-def get_zones():
-    if not open_price:
-        return "⚠️ Kein Opening Price gesetzt."
-    base = float(open_price)
-    zones = [colorize(round(base * (1 + i / 100), 2), base) for i in range(-5, 6)]
-    return "\n".join(zones)
+def parse_trade_command(text):
+    match = re.search(r"/trade (long|short) (\d+(\.\d+)?) SL=(\d+(\.\d+)?) TP=(\d+(\.\d+)?)", text, re.IGNORECASE)
+    if match:
+        direction, entry, _, sl, _, tp, _ = match.groups()
+        return {
+            "direction": direction.lower(),
+            "entry": float(entry),
+            "sl": float(sl),
+            "tp": float(tp),
+            "tag": "manual"
+        }
+    return None
 
-# Signal hinzufügen
-def add_signal(text):
-    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-    active_signals.append(f"{timestamp} - {text}")
+def format_trades():
+    longs = [t for t in active_trades if t['direction'] == 'long']
+    shorts = [t for t in active_trades if t['direction'] == 'short']
+    
+    text = "📈 Offene Positionen\n"
+    total_longs = sum(t['lot'] for t in longs)
+    total_shorts = sum(t['lot'] for t in shorts)
 
-# /batch Parser
-def handle_batch(text):
-    lines = text.splitlines()
-    parsed = []
-    for line in lines:
-        if line.strip().startswith("LONG") or line.strip().startswith("SHORT"):
-            try:
-                direction = "LONG" if "LONG" in line else "SHORT"
-                lot = float(re.search(r"(\d+(\.\d+)?) lot", line).group(1))
-                entry = float(re.search(r"@ (\d+(\.\d+)?)", line).group(1))
-                tp_match = re.search(r"TP: ([\d\.]+)", line)
-                tp = float(tp_match.group(1)) if tp_match else None
-                sl_match = re.search(r"SL: ([\d\.]+)", line)
-                sl = float(sl_match.group(1)) if sl_match else None
-                tag_match = re.search(r"Tag: (\w+)", line)
-                tag = tag_match.group(1) if tag_match else ""
-                parsed.append({"dir": direction, "lot": lot, "entry": entry, "tp": tp, "sl": sl, "tag": tag})
-            except Exception as e:
-                print(f"Fehler beim Parsen einer Zeile: {line} Fehler: {e}")
-    return parsed
+    if longs:
+        text += f"\n🟢 Longs ({len(longs)} | {total_longs} lot):"
+        for t in longs:
+            text += f"\n• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}"
 
-@app.route("/", methods=["GET"])
-def home():
-    return "US30 Bot v4.0.1 running"
+    if shorts:
+        text += f"\n\n🔴 Shorts ({len(shorts)} | {total_shorts} lot):"
+        for t in shorts:
+            text += f"\n• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}"
 
-@app.route("/telegram", methods=["POST"])
+    return text or "Keine offenen Positionen."
+
+def parse_batch(text):
+    trades = []
+    for line in text.split('\n'):
+        if 'lot' not in line:
+            continue
+        try:
+            direction = 'long' if line.lower().startswith('long') else 'short'
+            lot = float(re.search(r"(\d+(\.\d+)?) lot", line).group(1))
+            entry = float(re.search(r"@ (\d+(\.\d+)?)", line).group(1))
+            tp_match = re.search(r"TP: (\d+(\.\d+)?|open)", line)
+            sl_match = re.search(r"SL: (\d+(\.\d+)?|manual)", line)
+            tag_match = re.search(r"Tag: (\w+)", line)
+            
+            tp = tp_match.group(1) if tp_match else 'open'
+            sl = sl_match.group(1) if sl_match else 'manual'
+            tag = tag_match.group(1) if tag_match else 'manual'
+            
+            trade = {
+                "direction": direction,
+                "lot": lot,
+                "entry": entry,
+                "tp": float(tp) if tp != 'open' else 'open',
+                "sl": float(sl) if sl != 'manual' else 'manual',
+                "tag": tag
+            }
+            trades.append(trade)
+        except Exception as e:
+            print(f"Fehler beim Parsen einer Zeile: {line} Fehler: {e}")
+    return trades
+
+# --- Routen ---
+@app.route("/")
+def index():
+    return "US30 Bot Online"
+
+@app.route("/telegram", methods=['POST'])
 def telegram():
-    data = request.get_json()
-    if not data or "message" not in data:
-        return "ok"
+    data = request.json
+    chat_id = data['message']['chat']['id']
+    text = data['message'].get('text', '').strip()
 
-    chat_id = data["message"]["chat"]["id"]
-    text = data["message"].get("text", "")
-    response = ""
+    if text.lower().startswith("/help"):
+        help_text = f"📘 Befehle ({VERSION}):\n"
+        help_text += "/status – offene Positionen\n"
+        help_text += "/trade – Setup senden\n"
+        help_text += "/close – Trade schließen\n"
+        help_text += "/update – STDV aktualisieren\n"
+        help_text += "/openprice – STDV Startpreis setzen\n"
+        help_text += "/zones – STDV Zonen anzeigen\n"
+        help_text += "/signals – aktuelle Signale\n"
+        help_text += "/resetsignals – Signal-Reset\n"
+        help_text += "/batch – mehrere Trades"
+        send_message(chat_id, help_text)
 
-    # Normalisiere Text
-    cmd = text.lower()
+    elif text.lower().startswith("/status"):
+        send_message(chat_id, format_trades())
 
-    # Signaleingang (z. B. Momentum: Bullish 1h)
-    if any(x in text for x in ["Momentum:", "RSI", "MSS", "crossing"]):
-        add_signal(text)
-        return send(chat_id, f"✅ Signal empfangen: {text}")
+    elif text.lower().startswith("/trade"):
+        trade = parse_trade_command(text)
+        if trade:
+            trade['lot'] = 1.0
+            active_trades.append(trade)
+            send_message(chat_id, f"✅ Trade gespeichert: {trade['direction'].upper()} @ {trade['entry']} TP {trade['tp']} SL {trade['sl']}")
+        else:
+            send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade long 42500 SL=42250 TP=43200")
 
-    if cmd.startswith("/help"):
-        response = f"📘 Befehle ({version}):\n"
-        response += "/status – offene Positionen\n"
-        response += "/trade – Setup senden\n"
-        response += "/close – Trade schließen\n"
-        response += "/update – STDV aktualisieren\n"
-        response += "/openprice – STDV Startpreis setzen\n"
-        response += "/zones – STDV Zonen anzeigen\n"
-        response += "/signals – aktuelle Signale\n"
-        response += "/resetsignals – Signal-Reset\n"
-        response += "/batch – mehrere Trades"
+    elif text.lower().startswith("/batch"):
+        trades = parse_batch(text)
+        if trades:
+            active_trades.extend(trades)
+            send_message(chat_id, f"✅ {len(trades)} Trades hinzugefügt.")
+        else:
+            send_message(chat_id, "⚠️ Keine gültigen Trades erkannt.")
 
-    elif cmd.startswith("/openprice"):
-        try:
+    elif text.lower().startswith("/openprice"):
+        match = re.search(r"/openprice (\d+(\.\d+)?)", text, re.IGNORECASE)
+        if match:
             global open_price
-            open_price = float(re.findall(r"\d+\.?\d*", text)[0])
-            response = f"📈 Opening Price gesetzt: {open_price}\n\n{get_zones()}"
-        except:
-            response = "⚠️ Ungültiges Format. Beispiel: /openprice 44100"
-
-    elif cmd.startswith("/zones"):
-        response = get_zones()
-
-    elif cmd.startswith("/signals"):
-        if not active_signals:
-            response = "⚠️ Keine aktiven Signale."
+            open_price = float(match.group(1))
+            send_message(chat_id, f"📌 Opening Price gesetzt: {open_price}")
         else:
-            response = "\n".join(active_signals[-10:])
+            send_message(chat_id, "❌ Bitte gib den Opening Preis an. Beispiel: /openprice 44100")
 
-    elif cmd.startswith("/resetsignals"):
-        active_signals.clear()
-        response = "♻️ Signal-Speicher geleert."
+    elif text.lower().startswith("/resetsignals"):
+        signal_memory.clear()
+        send_message(chat_id, "🧹 Signal-Speicher wurde geleert.")
 
-    elif cmd.startswith("/batch"):
-        parsed = handle_batch(text)
-        if parsed:
-            active_trades.extend(parsed)
-            response = f"✅ {len(parsed)} Trades übernommen."
+    elif text.lower().startswith("/signals"):
+        if not signal_memory:
+            send_message(chat_id, "ℹ️ Keine gespeicherten Signale.")
         else:
-            response = "⚠️ Keine gültigen Trades erkannt."
-
-    elif cmd.startswith("/status"):
-        if not active_trades:
-            response = "📭 Keine aktiven Positionen."
-        else:
-            longs = [t for t in active_trades if t['dir'] == "LONG"]
-            shorts = [t for t in active_trades if t['dir'] == "SHORT"]
-            total_l = sum(t['lot'] for t in longs)
-            total_s = sum(t['lot'] for t in shorts)
-            response = f"📈 Offene Positionen\n\n🟢 Longs ({len(longs)} | {total_l} lot):"
-            for t in longs:
-                response += f"\n• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}"
-            response += f"\n\n🔴 Shorts ({len(shorts)} | {total_s} lot):"
-            for t in shorts:
-                response += f"\n• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}"
-
-    elif cmd.startswith("/trade"):
-        try:
-            dir_match = re.search(r"(long|short)", cmd)
-            entry_match = re.search(r"(\d{4,6})", cmd)
-            sl_match = re.search(r"sl=(\d+\.?\d*)", cmd)
-            tp_match = re.search(r"tp=(\d+\.?\d*)", cmd)
-            if dir_match and entry_match:
-                trade = {
-                    "dir": dir_match.group(1).upper(),
-                    "entry": float(entry_match.group(1)),
-                    "sl": float(sl_match.group(1)) if sl_match else None,
-                    "tp": float(tp_match.group(1)) if tp_match else None,
-                    "lot": 1.0,
-                    "tag": "manual"
-                }
-                active_trades.append(trade)
-                response = f"✅ Trade gespeichert: {trade['dir']} @ {trade['entry']}"
-            else:
-                response = "❌ Ungültiges Format. Beispiel: /trade long 42500 SL=42250 TP=43200"
-        except:
-            response = "⚠️ Fehler beim Speichern des Trades."
-
-    elif cmd.startswith("/close"):
-        entry = re.findall(r"\d+\.?\d*", cmd)
-        if not entry:
-            response = "❌ Bitte gib den Entry Preis an. Beispiel: /close 42500"
-        else:
-            e = float(entry[0])
-            before = len(active_trades)
-            active_trades[:] = [t for t in active_trades if t['entry'] != e]
-            after = len(active_trades)
-            if before == after:
-                response = "⚠️ Keine Position mit diesem Entry gefunden."
-            else:
-                response = f"✅ Position @ {e} geschlossen."
-
-    elif cmd.startswith("/update"):
-        if open_price:
-            response = f"♻️ STDV neu berechnet:\n{get_zones()}"
-        else:
-            response = "⚠️ Bitte zuerst /openprice setzen."
+            message = "🧠 Gespeicherte Signale:\n" + "\n".join(signal_memory[-10:])
+            send_message(chat_id, message)
 
     else:
-        response = "❓ Unbekannter Befehl. Nutze /help für alle Optionen."
+        send_message(chat_id, "❓ Unbekannter Befehl. Nutze /help für alle Optionen.")
 
-    return send(chat_id, response)
-
-# Antwort senden
-import requests
-
-def send(chat_id, msg):
-    TOKEN = "<DEIN_BOT_TOKEN>"
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {"chat_id": chat_id, "text": msg}
-    requests.post(url, json=data)
     return "ok"
+
+if __name__ == "__main__":
+    app.run(debug=True)
