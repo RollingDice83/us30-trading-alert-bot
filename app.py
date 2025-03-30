@@ -7,7 +7,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 active_trades = []
 signal_store_path = "us30_memory.json"
-version = "3.9"
+version = "3.9.1"
 
 # === Helper Functions ===
 
@@ -120,11 +120,13 @@ def handle_batch(text, chat_id):
                 direction = parts[0].strip().lower()
                 lot = float(parts[1].split()[0])
                 entry = float(re.search(r"@(\d+(?:\.\d+)?)", parts[1]).group(1))
-                tp = float(re.search(r"TP: (\d+(?:\.\d+)?)", parts[2]).group(1)) if "TP:" in parts[2] else "open"
+                tp_match = re.search(r"TP: (\d+(?:\.\d+)?)", parts[2])
+                tp = float(tp_match.group(1)) if tp_match else "open"
                 sl = parts[3].split(":")[-1].strip()
                 tag = parts[4].split(":")[-1].strip() if len(parts) > 4 else "n/a"
                 trades.append({"direction": direction, "lot": lot, "entry": entry, "tp": tp, "sl": sl, "tag": tag})
-            except:
+            except Exception as e:
+                print("Batch Parse Error:", e)
                 continue
     if trades:
         active_trades.extend(trades)
