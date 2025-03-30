@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-VERSION = "v4.1-FIXED"
+VERSION = "v4.1.1"
 
 active_trades = []
 signal_memory = []
@@ -47,19 +47,21 @@ def telegram():
     elif text.lower().startswith("/signals"):
         return send_message(chat_id, format_signals())
 
-    elif text.lower().startswith("/close"):
-        return send_message(chat_id, "🔐 Funktion '/close' wird demnächst aktiviert.")
-
-    elif text.lower().startswith("/update"):
-        return send_message(chat_id, "🔄 STDV-Zonen Update folgt in Modul 4.")
-
     elif text.lower().startswith("/zones"):
-        return send_message(chat_id, "📊 Aktuelle STDV-Zonen: [Platzhalter]")
+        return send_message(chat_id, format_zones())
+
+    elif text.lower().startswith("/close"):
+        return handle_close(text, chat_id)
+
+    # Signal Parsing (freier Text z. B. RSI, Momentum, MSS)
+    parsed = parse_signal(text)
+    if parsed:
+        signal_memory.append(parsed)
+        return send_message(chat_id, f"✅ Signal gespeichert: {parsed}")
 
     return send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
 
 def send_message(chat_id, text):
-    # Hier könnte man auch direkt requests.post zur Telegram API bauen
     print(f"SEND TO {chat_id}: {text}")
     return jsonify({
         "method": "sendMessage",
@@ -68,12 +70,12 @@ def send_message(chat_id, text):
     })
 
 def get_help():
-    return f"""📘 Befehle ({VERSION}):
+    return f"""\U0001F4D8 Befehle ({VERSION}):
 /status – offene Positionen
 /trade – Setup senden
-/close – Trade schließen
+/close [Preis] – Trade schließen
 /update – STDV aktualisieren
-/openprice – STDV Startpreis setzen
+/openprice [Preis] – STDV Startpreis setzen
 /zones – STDV Zonen anzeigen
 /signals – aktuelle Signale
 /resetsignals – Signal-Reset
@@ -146,10 +148,28 @@ def format_status():
             msg += f"• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}\n"
     return msg
 
+def handle_close(text, chat_id):
+    try:
+        match = re.search(r"/close\s+(\d+(\.\d+)?)", text)
+        if not match:
+            return send_message(chat_id, "❌ Beispiel: /close 44500")
+
+        price = float(match.group(1))
+        removed = [t for t in active_trades if t["entry"] == price]
+        if not removed:
+            return send_message(chat_id, f"ℹ️ Keine Position bei {price} gefunden.")
+
+        for t in removed:
+            active_trades.remove(t)
+
+        return send_message(chat_id, f"❌ Position @ {price} geschlossen.")
+    except:
+        return send_message(chat_id, "❌ Fehler beim Schließen der Position.")
+
 def handle_open_price(text, chat_id):
     global open_price
     try:
-        match = re.search(r"/openprice (\d+(?:\.\d+)?)", text)
+        match = re.search(r"/openprice (\d+(\.\d+)?)", text)
         if not match:
             return send_message(chat_id, "❌ Beispiel: /openprice 44100")
         open_price = float(match.group(1))
@@ -157,10 +177,29 @@ def handle_open_price(text, chat_id):
     except:
         return send_message(chat_id, "❌ Fehler beim Setzen des Opening Prices.")
 
+def format_zones():
+    if open_price is None:
+        return "❌ Bitte zuerst /openprice setzen."
+    percents = [-0.05, -0.03, -0.01, 0.01, 0.03, 0.05]
+    zones = [f"{int(open_price * (1 + p))} ({'+' if p > 0 else ''}{int(p*100)}%)" for p in percents]
+    return "📊 STDV-Zonen:\n" + "\n".join(zones)
+
 def format_signals():
     if not signal_memory:
         return "ℹ️ Keine aktiven Signale."
-    return "📡 Aktive Signale:\n" + "\n".join(signal_memory)
+    return "🛁 Aktive Signale:\n" + "\n".join(signal_memory)
+
+def parse_signal(text):
+    signal_patterns = [
+        r"RSI (Below|Above|Crossing (?:Up|Down)) (\d+\.?\d*)",
+        r"Momentum: (Bullish|Bearish) (\d+h|\d+m)",
+        r"MSS (Bullish|Bearish) Break.*?(\d+h|\d+m)?"
+    ]
+    for pattern in signal_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return f"{text} [{time.strftime('%H:%M:%S')}]"
+    return None
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
