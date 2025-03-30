@@ -1,104 +1,92 @@
-# US30 TradingBot – Modul 3.6
-
 from flask import Flask, request, jsonify
-import os, requests, re, json, datetime
+import os, requests, re, json
 
 app = Flask(__name__)
 
-BOT_VERSION = "v3.6"
-
+BOT_VERSION = "v3.6b"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
 active_trades = []
 signal_memory = {}
 stdv_zones = {}
 open_price = None
+
+# ========== UTILITIES ==========
 
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     requests.post(url, json=payload)
 
-def parse_trade_command(text):
-    pattern = r"/trade(?=.*\b(?P<symbol>\w+)\b)(?=.*\b(?P<direction>long|short)\b)(?=.*\b(?P<entry>\d+(?:\.\d+)?)\b)(?:.*?SL=(?P<sl>\d+(?:\.\d+)?))?(?:.*?TP=(?P<tp>\d+(?:\.\d+)?))?(?:.*?score=(?P<score>\d+))?(?:.*?tag=(?P<tag>[^\n]+))?"
-    match = re.search(pattern, text, re.IGNORECASE)
+# ========== HANDLERS ==========
+
+def parse_trade_line(line):
+    match = re.match(r"(LONG|SHORT)\s*\|\s*(\d+(?:\.\d+)?) lot @ (\d+(?:\.\d+)?)\s*\|\s*TP: ([\w\.]+)\s*\|\s*SL: ([\w\.]+)\s*\|\s*Tag: (.+)", line, re.IGNORECASE)
+    if match:
+        direction, lot, entry, tp, sl, tag = match.groups()
+        return {
+            "symbol": "US30",
+            "direction": direction.lower(),
+            "entry": float(entry),
+            "tp": None if tp.lower() in ['open', 'none'] else float(tp),
+            "sl": None if sl.lower() in ['manual', 'none'] else float(sl),
+            "score": None,
+            "tag": tag.strip(),
+            "lot": float(lot)
+        }
+    return None
+
+def handle_batch(text, chat_id):
+    lines = text.split("\n")
+    new_trades = []
+    for line in lines:
+        if "|" in line:
+            parsed = parse_trade_line(line)
+            if parsed:
+                active_trades.append(parsed)
+                new_trades.append(parsed)
+
+    if not new_trades:
+        send_message(chat_id, "⚠️ Keine gültigen Batch-Positionen erkannt.")
+        return
+
+    msg = f"✅ {len(new_trades)} Position(en) übernommen:\n"
+    for t in new_trades:
+        msg += f"• {t['direction'].upper()} {t['lot']} Lot @ {t['entry']} – {t['tag']}\n"
+    send_message(chat_id, msg)
+
+def handle_open_price_command(text, chat_id):
+    global open_price, stdv_zones
+    match = re.match(r"/openprice (\d+(?:\.\d+)?)", text, re.IGNORECASE)
     if not match:
-        return None
-    data = match.groupdict()
-    return {
-        "symbol": data["symbol"].upper(),
-        "direction": data["direction"].lower(),
-        "entry": float(data["entry"]),
-        "sl": float(data["sl"]) if data["sl"] else None,
-        "tp": float(data["tp"]) if data["tp"] else None,
-        "score": int(data["score"]) if data["score"] else None,
-        "tag": data["tag"].strip() if data["tag"] else "",
-        "lot": 1.0
+        send_message(chat_id, "❌ Bitte nutze: /OpenPrice 44100")
+        return
+    open_price = float(match.group(1))
+    stdv_zones = {
+        f"-{i}%": round(open_price * (1 - i / 100), 2) for i in range(1, 6)
     }
+    stdv_zones.update({
+        f"+{i}%": round(open_price * (1 + i / 100), 2) for i in range(1, 6)
+    })
+    send_message(chat_id, f"📈 Opening Preis gesetzt: {open_price}\nSTDV Zonen aktualisiert.")
 
-def parse_close_command(text):
-    if "/close all" in text:
-        return "ALL", None, text.split()[-1] if len(text.split()) > 2 else ""
-    match = re.match(r"/close (?P<symbol>\w+) (?P<entry>\d+(?:\.\d+)?)(?: (?P<tag>\w+))?", text, re.IGNORECASE)
-    if not match:
-        return None, None, None
-    data = match.groupdict()
-    return data["symbol"].upper(), float(data["entry"]), data["tag"] or ""
-
-def handle_trade_command(user_text, chat_id):
-    trade = parse_trade_command(user_text)
-    if not trade:
-        send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade US30 long 42650 SL=42500 TP=43000 score=80 tag=Breakout")
+def handle_zones(chat_id):
+    if not open_price or not stdv_zones:
+        send_message(chat_id, "⚠️ Kein Opening Preis gesetzt. Nutze /OpenPrice 44100")
         return
-    active_trades.append(trade)
-    msg = f"📥 Neuer Trade\n<b>{trade['symbol']} {trade['direction'].upper()}</b> @ {trade['entry']:.2f} ({trade['lot']} Lot)"
-    if trade['sl']: msg += f"\n🔻 SL: {trade['sl']}"
-    if trade['tp']: msg += f"\n🎯 TP: {trade['tp']}"
-    if trade['score'] is not None: msg += f"\n📊 Score: {trade['score']}/100"
-    if trade['tag']: msg += f"\n🏷️ Tag: {trade['tag']}"
+    msg = f"<b>📊 STDV Zonen (ab {open_price}):</b>\n"
+    for key in sorted(stdv_zones.keys(), key=lambda x: int(x.replace('%', '').replace('+', '').replace('-', '-'))):
+        val = stdv_zones[key]
+        color = "🟥" if "-" in key else "🟩"
+        msg += f"{color} {key}: <b>{val}</b>\n"
     send_message(chat_id, msg)
 
-def handle_close_command(user_text, chat_id):
-    global active_trades
-    symbol, entry, tag = parse_close_command(user_text)
-    if not symbol:
-        send_message(chat_id, "❌ Bitte gib die Position an, z.B. /close US30 42650")
+def handle_update(chat_id):
+    if not open_price:
+        send_message(chat_id, "⚠️ Kein Opening Preis gesetzt.")
         return
-    if symbol == "ALL":
-        count = len(active_trades)
-        active_trades = []
-        send_message(chat_id, f"🛑 Alle {count} offenen Positionen geschlossen.")
-        return
-    original = len(active_trades)
-    active_trades = [t for t in active_trades if not (t['symbol'] == symbol and t['entry'] == entry)]
-    closed = original - len(active_trades)
-    msg = f"✅ {closed}x Position {symbol} @ {entry} geschlossen. Tag: {tag}" if closed else "⚠️ Keine passende Position gefunden."
-    send_message(chat_id, msg)
-
-def handle_status(chat_id):
-    if not active_trades:
-        send_message(chat_id, "📊 Keine offenen Positionen.")
-        return
-    longs = [t for t in active_trades if t['direction'] == "long"]
-    shorts = [t for t in active_trades if t['direction'] == "short"]
-    msg = f"<b>📈 Offene Positionen ({len(active_trades)}):</b>\n"
-    if longs:
-        msg += "\n<b>🟢 LONGS:</b>\n"
-        for t in longs:
-            msg += f"• {t['lot']} Lot @ {t['entry']}"
-            if t['tp']: msg += f" → TP {t['tp']}"
-            if t['sl']: msg += f", SL {t['sl']}"
-            if t['tag']: msg += f" – {t['tag']}"
-            msg += "\n"
-    if shorts:
-        msg += "\n<b>🔴 SHORTS:</b>\n"
-        for t in shorts:
-            msg += f"• {t['lot']} Lot @ {t['entry']}"
-            if t['tp']: msg += f" → TP {t['tp']}"
-            if t['sl']: msg += f", SL {t['sl']}"
-            if t['tag']: msg += f" – {t['tag']}"
-            msg += "\n"
-    send_message(chat_id, msg)
+    handle_open_price_command(f"/OpenPrice {open_price}", chat_id)
 
 def handle_help(chat_id):
     msg = f"<b>🤖 US30 Trading Bot – {BOT_VERSION}</b>\n\n"
@@ -115,41 +103,32 @@ def handle_help(chat_id):
     msg += "/help – Hilfe anzeigen"
     send_message(chat_id, msg)
 
-def handle_signals(chat_id):
-    if not signal_memory:
-        send_message(chat_id, "📡 Kein aktives Signal im Speicher.")
-        return
-    msg = "<b>🧠 Aktive Signale:</b>\n"
-    for key, val in signal_memory.items():
-        ts = val.get("time", "–")
-        score = val.get("score", "–")
-        msg += f"• <b>{key}</b>: Score {score} @ {ts}\n"
-    send_message(chat_id, msg)
+# ========== ROUTING ==========
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def home():
     return f"US30 Bot {BOT_VERSION} läuft ✅"
 
 @app.route("/telegram", methods=["POST"])
 def telegram():
     data = request.get_json()
-    if not data: return jsonify({"status": "error"}), 400
     msg = data.get("message", {})
-    text = msg.get("text", "")
+    text = msg.get("text", "").strip()
     chat_id = msg.get("chat", {}).get("id", "")
-    
-    if text.lower().startswith("/status"):
-        handle_status(chat_id)
-    elif text.lower().startswith("/trade"):
-        handle_trade_command(text, chat_id)
-    elif text.lower().startswith("/close"):
-        handle_close_command(text, chat_id)
-    elif text.lower().startswith("/signals"):
-        handle_signals(chat_id)
-    elif text.lower().startswith("/resetsignals"):
-        signal_memory.clear()
-        send_message(chat_id, "♻️ Alle aktiven Signale wurden gelöscht.")
-    elif text.lower().startswith("/help"):
+
+    if not text:
+        return jsonify({"status": "error"}), 400
+
+    lowered = text.lower()
+    if lowered.startswith("/batch"):
+        handle_batch(text, chat_id)
+    elif lowered.startswith("/openprice"):
+        handle_open_price_command(text, chat_id)
+    elif lowered.startswith("/zones"):
+        handle_zones(chat_id)
+    elif lowered.startswith("/update"):
+        handle_update(chat_id)
+    elif lowered.startswith("/help"):
         handle_help(chat_id)
     else:
         send_message(chat_id, "❓ Unbekannter Befehl. Nutze /help für alle Optionen.")
