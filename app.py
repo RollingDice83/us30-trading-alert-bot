@@ -6,7 +6,7 @@ app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-BOT_VERSION = "v3.6"
+BOT_VERSION = "v3.7"
 
 active_trades = []
 stdv_zones = {}
@@ -53,44 +53,52 @@ def telegram():
         return jsonify({"status": "ok"})
 
     msg = data["message"]
-    text = msg.get("text", "")
+    text = msg.get("text", "").strip()
     chat_id = msg["chat"]["id"]
 
-    if text.startswith("/start") or text.startswith("/help"):
-        send_message(chat_id, f"📘 Befehle (Version {BOT_VERSION}):\n"
+    lowered = text.lower()
+
+    if lowered.startswith("/start") or lowered.startswith("/help"):
+        send_message(chat_id, f"\uD83D\uDCDA Befehle (Version {BOT_VERSION}):\n"
                               "/status – offene Positionen\n"
                               "/trade – Trade-Setup senden\n"
                               "/close – Position schließen\n"
                               "/update – STDV Zonen aktualisieren\n"
-                              "/OpenPrice [Preis] – Opening Preis setzen\n"
+                              "/openprice [Preis] – Opening Preis setzen\n"
                               "/zones – STDV Zonen anzeigen\n"
                               "/resetsignals – Signal-Speicher leeren\n"
                               "/signals – aktuelle Signals anzeigen\n"
                               "/batch – mehrere Trades senden")
-    elif text.startswith("/status"):
+
+    elif lowered.startswith("/status"):
         handle_status(chat_id)
-    elif text.startswith("/trade"):
+
+    elif lowered.startswith("/trade"):
         handle_trade(text, chat_id)
-    elif text.startswith("/close"):
-        handle_close(text, chat_id)
-    elif text.startswith("/OpenPrice"):
+
+    elif lowered.startswith("/close"):
+        send_message(chat_id, "\uD83D\uDEA7 /close wird im nächsten Modul erweitert.")
+
+    elif lowered.startswith("/openprice"):
         try:
             price = float(text.split()[1])
             save_opening_price(price)
             calculate_stdv(price)
-            send_message(chat_id, f"📌 Opening Price gesetzt: <b>{price}</b>")
+            send_message(chat_id, f"\uD83D\uDCCC Opening Price gesetzt: <b>{price}</b>")
         except:
-            send_message(chat_id, "⚠️ Formatfehler. Beispiel: /OpenPrice 44100")
-    elif text.startswith("/update"):
+            send_message(chat_id, "⚠️ Formatfehler. Beispiel: /openprice 44100")
+
+    elif lowered.startswith("/update"):
         price = load_opening_price()
         if price:
             calculate_stdv(price)
-            send_message(chat_id, f"🔄 STDV Zonen aktualisiert auf Basis von: {price}")
+            send_message(chat_id, f"\uD83D\uDD04 STDV Zonen aktualisiert auf Basis von: {price}")
         else:
             send_message(chat_id, "⚠️ Kein Opening Price gesetzt.")
-    elif text.startswith("/zones"):
+
+    elif lowered.startswith("/zones"):
         if not stdv_zones:
-            send_message(chat_id, "⚠️ Keine Zonen berechnet. Nutze /OpenPrice zuerst.")
+            send_message(chat_id, "⚠️ Keine Zonen berechnet. Nutze /openprice zuerst.")
         else:
             msg = "<b>📊 Aktuelle STDV-Zonen</b>\n"
             msg += f"<i>Opening:</i> <b>{load_opening_price()}</b>\n\n"
@@ -98,19 +106,22 @@ def telegram():
                 color = "🟩" if "+" in k else "🟥"
                 msg += f"{color} {k}: {v}\n"
             send_message(chat_id, msg)
-    elif text.startswith("/resetsignals"):
+
+    elif lowered.startswith("/resetsignals"):
         signal_memory.clear()
         send_message(chat_id, "🧠 Signal-Speicher wurde geleert.")
-    elif text.startswith("/signals"):
+
+    elif lowered.startswith("/signals"):
         if not signal_memory:
             send_message(chat_id, "📭 Keine aktiven Signale gespeichert.")
         else:
             msg = "<b>🧠 Aktive Signale:</b>\n" + "\n".join([f"• {s}" for s in signal_memory[-20:]])
             send_message(chat_id, msg)
-    elif text.startswith("/batch"):
+
+    elif lowered.startswith("/batch"):
         handle_batch(text, chat_id)
+
     else:
-        # Optional: Signal-Impuls als Text (für Tests)
         signal_memory.append(text.strip())
         send_message(chat_id, f"📡 Signal gespeichert: {text.strip()}")
 
@@ -140,27 +151,30 @@ def handle_trade(text, chat_id):
     }
     active_trades.append(trade)
     send_message(chat_id, f"✅ Trade gespeichert: {symbol.upper()} {direction} @ {entry}\n"
-                          f"SL: {sl or '—'} | TP: {tp or '—'} | Score: {score or '—'} | Tag: {tag or '—'}")
+                              f"SL: {sl or '—'} | TP: {tp or '—'} | Score: {score or '—'} | Tag: {tag or '—'}")
 
 def handle_status(chat_id):
     if not active_trades:
         send_message(chat_id, "📊 Keine offenen Positionen.")
         return
-    msg = "📈 <b>Offene Positionen:</b>\n"
+    msg = "📈 <b>Offene Positionen</b>\n"
     longs = [t for t in active_trades if t["direction"] == "long"]
     shorts = [t for t in active_trades if t["direction"] == "short"]
     if longs:
-        msg += "\n🟩 <b>Longs:</b>\n"
+        total_lot = sum(t["lot"] for t in longs)
+        msg += f"\n🟢 Longs ({len(longs)} | {total_lot:.1f} Lot):\n"
         for t in longs:
-            msg += f"• {t['lot']} lot @ {t['entry']} | TP: {t['tp'] or '—'} | SL: {t['sl'] or '—'} | Tag: {t['tag']}\n"
+            msg += f"• {t['lot']} lot @ {t['entry']}"
+            if t['tp']: msg += f" → TP {t['tp']}"
+            msg += f" – SL: {t['sl'] or 'manual'}\n"
     if shorts:
-        msg += "\n🟥 <b>Shorts:</b>\n"
+        total_lot = sum(t["lot"] for t in shorts)
+        msg += f"\n🔴 Shorts ({len(shorts)} | {total_lot:.1f} Lot):\n"
         for t in shorts:
-            msg += f"• {t['lot']} lot @ {t['entry']} | TP: {t['tp'] or '—'} | SL: {t['sl'] or '—'} | Tag: {t['tag']}\n"
+            msg += f"• {t['lot']} lot @ {t['entry']}"
+            if t['tp']: msg += f" → TP {t['tp']}"
+            msg += f" – SL: {t['sl'] or 'manual'}\n"
     send_message(chat_id, msg)
-
-def handle_close(text, chat_id):
-    send_message(chat_id, "🚧 /close wird im nächsten Modul erweitert.")
 
 def handle_batch(text, chat_id):
     global active_trades
