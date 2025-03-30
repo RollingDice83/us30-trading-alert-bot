@@ -7,7 +7,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 active_trades = []
 signal_store_path = "us30_memory.json"
-version = "3.9.1"
+version = "3.9.2"
 
 # === Helper Functions ===
 
