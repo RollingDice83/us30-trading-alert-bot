@@ -4,11 +4,16 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-VERSION = "v4.0.3"
+VERSION = "v4.1"
 
 active_trades = []
 signal_memory = []
 open_price = None
+
+def send_message(chat_id, text):
+    print(f"SEND TO {chat_id}: {text}")
+    # Placeholder – für echte Telegram-Integration hier HTTP-POST einbauen
+    return json.dumps({"method": "sendMessage", "chat_id": chat_id, "text": text})
 
 @app.route("/", methods=["GET"])
 def home():
@@ -22,45 +27,40 @@ def telegram():
 
     message = data["message"]
     chat_id = message["chat"]["id"]
-    text = message.get("text", "").strip()
+    text = message.get("text", "").strip().lower()
 
-    if text.lower().startswith("/help"):
+    if text.startswith("/help"):
         return send_message(chat_id, get_help())
 
-    elif text.lower().startswith("/status"):
+    elif text.startswith("/status"):
         return send_message(chat_id, format_status())
 
-    elif text.lower().startswith("/trade"):
+    elif text.startswith("/trade"):
         return handle_trade(text, chat_id)
 
-    elif text.lower().startswith("/batch"):
+    elif text.startswith("/batch"):
         return handle_batch(text, chat_id)
 
-    elif text.lower().startswith("/openprice"):
+    elif text.startswith("/openprice"):
         return handle_open_price(text, chat_id)
 
-    elif text.lower().startswith("/resetsignals"):
+    elif text.startswith("/resetsignals"):
         signal_memory.clear()
         return send_message(chat_id, "♻️ Signal-Speicher geleert.")
 
-    elif text.lower().startswith("/signals"):
+    elif text.startswith("/signals"):
         return send_message(chat_id, format_signals())
 
-    elif text.lower().startswith("/close"):
+    elif text.startswith("/close"):
         return send_message(chat_id, "🔐 Funktion '/close' wird demnächst aktiviert.")
 
-    elif text.lower().startswith("/update"):
+    elif text.startswith("/update"):
         return send_message(chat_id, "🔄 STDV-Zonen Update folgt in Modul 4.")
 
-    elif text.lower().startswith("/zones"):
+    elif text.startswith("/zones"):
         return send_message(chat_id, "📊 Aktuelle STDV-Zonen: [Platzhalter]")
 
     return send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
-
-def send_message(chat_id, text):
-    print(f"SEND TO {chat_id}: {text}")
-    # Hier später echten Telegram-Versand einbauen (z. B. via requests.post)
-    return "ok"
 
 def get_help():
     return f"""📘 Befehle ({VERSION}):
@@ -76,10 +76,10 @@ def get_help():
 
 def handle_trade(text, chat_id):
     try:
-        pattern = r"/trade\s+(long|short)\s+(\d+(?:\.\d+)?)\s+SL=(\d+(?:\.\d+)?)\s+TP=(\d+(?:\.\d+)?)"
-        match = re.search(pattern, text.lower())
+        pattern = r"/trade\s+(long|short)\s+(\d+(?:\.\d+)?)\s+sl=(\d+(?:\.\d+)?)\s+tp=(\d+(?:\.\d+)?)"
+        match = re.search(pattern, text)
         if not match:
-            return send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade long 42500 SL=42250 TP=43200")
+            return send_message(chat_id, "❌ Format: /trade long 42500 SL=42250 TP=43200")
 
         direction, entry, sl, tp = match.groups()
         trade = {
@@ -121,10 +121,7 @@ def handle_batch(text, chat_id):
             except:
                 continue
 
-    if count == 0:
-        return send_message(chat_id, "⚠️ Keine gültigen Trades erkannt.")
-    else:
-        return send_message(chat_id, f"✅ {count} Trades gespeichert.")
+    return send_message(chat_id, f"✅ {count} Trades gespeichert." if count > 0 else "⚠️ Keine gültigen Trades erkannt.")
 
 def format_status():
     if not active_trades:
@@ -142,15 +139,14 @@ def format_status():
         msg += f"\n🔴 Shorts ({len(shorts)}):\n"
         for t in shorts:
             msg += f"• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}\n"
-
     return msg
 
 def handle_open_price(text, chat_id):
     global open_price
     try:
-        match = re.search(r"/openprice (\d+(?:\.\d+)?)", text.lower())
+        match = re.search(r"/openprice (\d+(?:\.\d+)?)", text)
         if not match:
-            return send_message(chat_id, "❌ Bitte gib einen gültigen Preis an. Beispiel: /openprice 44100")
+            return send_message(chat_id, "❌ Beispiel: /openprice 44100")
         open_price = float(match.group(1))
         return send_message(chat_id, f"📍 Opening Price gesetzt: {open_price}")
     except:
