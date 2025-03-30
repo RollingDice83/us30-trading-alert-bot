@@ -1,19 +1,15 @@
 import json
 import re
-from flask import Flask, request
+import time
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-VERSION = "v4.1"
+VERSION = "v4.1-FIXED"
 
 active_trades = []
 signal_memory = []
 open_price = None
-
-def send_message(chat_id, text):
-    print(f"SEND TO {chat_id}: {text}")
-    # Placeholder – für echte Telegram-Integration hier HTTP-POST einbauen
-    return json.dumps({"method": "sendMessage", "chat_id": chat_id, "text": text})
 
 @app.route("/", methods=["GET"])
 def home():
@@ -23,44 +19,53 @@ def home():
 def telegram():
     data = request.json
     if not data or "message" not in data:
-        return "ok"
+        return jsonify(ok=True)
 
     message = data["message"]
     chat_id = message["chat"]["id"]
-    text = message.get("text", "").strip().lower()
+    text = message.get("text", "").strip()
 
-    if text.startswith("/help"):
+    if text.lower().startswith("/help"):
         return send_message(chat_id, get_help())
 
-    elif text.startswith("/status"):
+    elif text.lower().startswith("/status"):
         return send_message(chat_id, format_status())
 
-    elif text.startswith("/trade"):
+    elif text.lower().startswith("/trade"):
         return handle_trade(text, chat_id)
 
-    elif text.startswith("/batch"):
+    elif text.lower().startswith("/batch"):
         return handle_batch(text, chat_id)
 
-    elif text.startswith("/openprice"):
+    elif text.lower().startswith("/openprice"):
         return handle_open_price(text, chat_id)
 
-    elif text.startswith("/resetsignals"):
+    elif text.lower().startswith("/resetsignals"):
         signal_memory.clear()
         return send_message(chat_id, "♻️ Signal-Speicher geleert.")
 
-    elif text.startswith("/signals"):
+    elif text.lower().startswith("/signals"):
         return send_message(chat_id, format_signals())
 
-    elif text.startswith("/close"):
+    elif text.lower().startswith("/close"):
         return send_message(chat_id, "🔐 Funktion '/close' wird demnächst aktiviert.")
 
-    elif text.startswith("/update"):
+    elif text.lower().startswith("/update"):
         return send_message(chat_id, "🔄 STDV-Zonen Update folgt in Modul 4.")
 
-    elif text.startswith("/zones"):
+    elif text.lower().startswith("/zones"):
         return send_message(chat_id, "📊 Aktuelle STDV-Zonen: [Platzhalter]")
 
     return send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
+
+def send_message(chat_id, text):
+    # Hier könnte man auch direkt requests.post zur Telegram API bauen
+    print(f"SEND TO {chat_id}: {text}")
+    return jsonify({
+        "method": "sendMessage",
+        "chat_id": chat_id,
+        "text": text
+    })
 
 def get_help():
     return f"""📘 Befehle ({VERSION}):
@@ -76,14 +81,14 @@ def get_help():
 
 def handle_trade(text, chat_id):
     try:
-        pattern = r"/trade\s+(long|short)\s+(\d+(?:\.\d+)?)\s+sl=(\d+(?:\.\d+)?)\s+tp=(\d+(?:\.\d+)?)"
-        match = re.search(pattern, text)
+        pattern = r"/trade\s+(long|short)\s+(\d+(?:\.\d+)?)\s+SL=(\d+(?:\.\d+)?)\s+TP=(\d+(?:\.\d+)?)"
+        match = re.search(pattern, text, re.IGNORECASE)
         if not match:
-            return send_message(chat_id, "❌ Format: /trade long 42500 SL=42250 TP=43200")
+            return send_message(chat_id, "❌ Format: /trade long 42500 SL=42250 TP=43300")
 
         direction, entry, sl, tp = match.groups()
         trade = {
-            "type": direction,
+            "type": direction.lower(),
             "lot": 1,
             "entry": float(entry),
             "sl": float(sl),
@@ -158,4 +163,4 @@ def format_signals():
     return "📡 Aktive Signale:\n" + "\n".join(signal_memory)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=10000)
