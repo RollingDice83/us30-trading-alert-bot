@@ -87,6 +87,28 @@ def handle_signals(chat_id):
         msg += f"\n🧠 Kontext-Score: {score}/100\n➕ Gründe: {', '.join(reasons)}"
     send_message(chat_id, msg)
 
+def handle_batch(text, chat_id):
+    trades = []
+    lines = text.strip().split("\n")
+    for line in lines:
+        if line.strip().upper().startswith("LONG") or line.strip().upper().startswith("SHORT"):
+            try:
+                parts = line.split("|")
+                direction = parts[0].strip().lower()
+                lot = float(parts[1].split()[0])
+                entry = float(re.search(r"@(.*?)\s", parts[1]).group(1))
+                tp = float(re.search(r"TP: ([\d.]+)", parts[2]).group(1)) if "TP:" in parts[2] else "open"
+                sl = parts[3].split(":")[-1].strip()
+                tag = parts[4].split(":")[-1].strip() if len(parts) > 4 else "n/a"
+                trades.append({"direction": direction, "lot": lot, "entry": entry, "tp": tp, "sl": sl, "tag": tag})
+            except:
+                continue
+    if trades:
+        active_trades.extend(trades)
+        send_message(chat_id, f"✅ {len(trades)} Trades hinzugefügt.")
+    else:
+        send_message(chat_id, "⚠️ Keine gültigen Trades erkannt.")
+
 def handle_signal_push(data):
     text = data.get("text", "").strip()
     if "RSI" in text or "Momentum" in text or "MSS" in text or "Zone" in text:
@@ -116,6 +138,8 @@ def telegram():
         handle_resetsignals(chat_id)
     elif text.lower().startswith("/signals"):
         handle_signals(chat_id)
+    elif text.lower().startswith("/batch"):
+        handle_batch(text, chat_id)
     elif text.lower().startswith("/help"):
         send_message(chat_id, f"📘 Befehle (v{version}):\n/status – offene Positionen\n/trade – Setup senden\n/close – Trade schließen\n/update – STDV aktualisieren\n/openprice – STDV Startpreis setzen\n/zones – STDV Zonen anzeigen\n/signals – aktuelle Signale\n/resetsignals – Signal-Reset\n/batch – mehrere Trades")
     else:
