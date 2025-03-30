@@ -1,4 +1,4 @@
-# --- ANFANG: US30 Telegram Bot v4.0 ---
+# --- ANFANG: US30 Telegram Bot v4.0.1 ---
 
 from flask import Flask, request, jsonify
 import os, re, json, requests
@@ -11,7 +11,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 active_trades = []
 signal_store_path = "us30_memory.json"
 context_store_path = "us30_context.json"
-version = "4.0"
+version = "4.0.1"
 
 # === Helper Functions ===
 
@@ -91,7 +91,7 @@ def score_signals():
 # === Command Handlers ===
 
 def handle_openprice(text, chat_id):
-    match = re.search(r"/openprice\\s+(\\d+(?:\\.\\d+)?)", text.lower())
+    match = re.search(r"/openprice\s+(\d+(?:\.\d+)?)", text.lower())
     if match:
         price = float(match.group(1))
         set_opening_price(price)
@@ -141,12 +141,35 @@ def telegram():
     if text.lower().startswith("/openprice"):
         handle_openprice(text, chat_id)
     elif text.lower().startswith("/help"):
-        send_message(chat_id, f"📘 Befehle (v{version}):\n/openprice – STDV setzen\n/signals – akt. Signale\n/resetsignals – leeren")
+        send_message(chat_id, f"📘 Befehle (v{version}):\n/openprice – STDV setzen\n/signals – akt. Signale\n/resetsignals – leeren\n/batch – Trades eintragen")
     elif text.lower().startswith("/signals"):
         handle_signals(text, chat_id)
     elif text.lower().startswith("/resetsignals"):
         reset_signals()
         send_message(chat_id, "✅ Signal-Speicher gelöscht.")
+    elif text.lower().startswith("/batch"):
+        lines = text.splitlines()
+        parsed = []
+        for line in lines:
+            if not line.strip().upper().startswith("LONG") and not line.strip().upper().startswith("SHORT"):
+                continue
+            try:
+                pos = {
+                    "type": "LONG" if "LONG" in line.upper() else "SHORT",
+                    "lot": float(re.search(r"(\d+(\.\d+)?) lot", line).group(1)),
+                    "entry": float(re.search(r"@ (\d+(\.\d+)?)", line).group(1)),
+                    "tp": float(re.search(r"TP: (\d+(\.\d+)?)", line).group(1)) if "TP:" in line else None,
+                    "sl": re.search(r"SL: (\d+(\.\d+)?|manual)", line).group(1),
+                    "tag": re.search(r"Tag: ([\w ]+)", line).group(1)
+                }
+                parsed.append(pos)
+            except Exception as e:
+                print(f"Fehler beim Parsen einer Zeile: {line} Fehler: {e}")
+        if parsed:
+            active_trades.extend(parsed)
+            send_message(chat_id, f"✅ {len(parsed)} Position(en) hinzugefügt.")
+        else:
+            send_message(chat_id, "⚠️ Keine gültigen Trades erkannt.")
     else:
         handle_signal_push(msg)
 
@@ -156,4 +179,4 @@ def telegram():
 def index():
     return f"US30-Bot v{version} läuft ✅"
 
-# --- ENDE: US30 Telegram Bot v4.0 ---
+# --- ENDE: US30 Telegram Bot v4.0.1 ---
