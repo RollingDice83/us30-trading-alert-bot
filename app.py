@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-VERSION = "v4.1.1"
+VERSION = "v4.1.2"
 
 active_trades = []
 signal_memory = []
@@ -53,7 +53,6 @@ def telegram():
     elif text.lower().startswith("/close"):
         return handle_close(text, chat_id)
 
-    # Signal Parsing (freier Text z. B. RSI, Momentum, MSS)
     parsed = parse_signal(text)
     if parsed:
         signal_memory.append(parsed)
@@ -70,7 +69,7 @@ def send_message(chat_id, text):
     })
 
 def get_help():
-    return f"""\U0001F4D8 Befehle ({VERSION}):
+    return f"""📘 Befehle ({VERSION}):
 /status – offene Positionen
 /trade – Setup senden
 /close [Preis] – Trade schließen
@@ -180,24 +179,26 @@ def handle_open_price(text, chat_id):
 def format_zones():
     if open_price is None:
         return "❌ Bitte zuerst /openprice setzen."
-    percents = [-0.05, -0.03, -0.01, 0.01, 0.03, 0.05]
-    zones = [f"{int(open_price * (1 + p))} ({'+' if p > 0 else ''}{int(p*100)}%)" for p in percents]
-    return "📊 STDV-Zonen:\n" + "\n".join(zones)
+    zones = []
+    for i in range(-5, 6):
+        level = round(open_price * (1 + i / 100), 1)
+        color = "🟥" if i < 0 else ("🟩" if i > 0 else "🟩")
+        zones.append(f"{color} {i:+}%: {level}")
+    return "📊 STDV Zonen:\n" + "\n".join(zones)
 
 def format_signals():
     if not signal_memory:
         return "ℹ️ Keine aktiven Signale."
-    return "🛁 Aktive Signale:\n" + "\n".join(signal_memory)
+    return "🛰 Aktive Signale:\n" + "\n".join(signal_memory)
 
 def parse_signal(text):
     signal_patterns = [
-        r"RSI (Below|Above|Crossing (?:Up|Down)) (\d+\.?\d*)",
-        r"Momentum: (Bullish|Bearish) (\d+h|\d+m)",
-        r"MSS (Bullish|Bearish) Break.*?(\d+h|\d+m)?"
+        r"rsi.*?(\d+\.\d+)",
+        r"momentum.*?(bullish|bearish)",
+        r"mss.*?(bullish|bearish).*?break"
     ]
     for pattern in signal_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
+        if re.search(pattern, text, re.IGNORECASE):
             return f"{text} [{time.strftime('%H:%M:%S')}]"
     return None
 
