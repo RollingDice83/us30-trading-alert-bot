@@ -7,7 +7,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 active_trades = []
 signal_store_path = "us30_memory.json"
-version = "3.8"
+version = "3.9"
 
 # === Helper Functions ===
 
@@ -49,6 +49,9 @@ def score_signals():
     if any("Zone -2%" in t for t in tags):
         score += 15
         reasons.append("STDV -2% Pullback")
+    if any("crossing up" in t for t in tags):
+        score += 10
+        reasons.append("Preis Break")
     if len(reasons) >= 3:
         score += 10
 
@@ -96,8 +99,8 @@ def handle_batch(text, chat_id):
                 parts = line.split("|")
                 direction = parts[0].strip().lower()
                 lot = float(parts[1].split()[0])
-                entry = float(re.search(r"@(.*?)\s", parts[1]).group(1))
-                tp = float(re.search(r"TP: ([\d.]+)", parts[2]).group(1)) if "TP:" in parts[2] else "open"
+                entry = float(re.search(r"@(.*?)\\s", parts[1]).group(1))
+                tp = float(re.search(r"TP: ([\\d.]+)", parts[2]).group(1)) if "TP:" in parts[2] else "open"
                 sl = parts[3].split(":")[-1].strip()
                 tag = parts[4].split(":")[-1].strip() if len(parts) > 4 else "n/a"
                 trades.append({"direction": direction, "lot": lot, "entry": entry, "tp": tp, "sl": sl, "tag": tag})
@@ -111,7 +114,7 @@ def handle_batch(text, chat_id):
 
 def handle_signal_push(data):
     text = data.get("text", "").strip()
-    if "RSI" in text or "Momentum" in text or "MSS" in text or "Zone" in text:
+    if any(keyword in text for keyword in ["RSI", "Momentum", "MSS", "Zone", "crossing"]):
         signals = load_signals()
         signals.append({"text": text, "time": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")})
         save_signals(signals)
