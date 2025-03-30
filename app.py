@@ -105,6 +105,7 @@ def handle_trade(cmd, chat_id):
 
 # 🔹 /close Handler
 def handle_close(text, chat_id):
+    global active_trades
     pattern = r"/close\s+(?P<symbol>\w+)\s+(?P<entry>\d+(?:\.\d+)?)(?:\s+(?P<tag>.*))?"
     match = re.search(pattern, text, re.IGNORECASE)
     if not match:
@@ -113,7 +114,6 @@ def handle_close(text, chat_id):
     d = match.groupdict()
     entry = float(d["entry"])
     before = len(active_trades)
-    global active_trades
     active_trades = [t for t in active_trades if not (t["symbol"] == d["symbol"].upper() and t["entry"] == entry)]
     after = len(active_trades)
     if before > after:
