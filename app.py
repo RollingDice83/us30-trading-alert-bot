@@ -1,256 +1,157 @@
+# US30 TradingBot – Modul 3.6
+
 from flask import Flask, request, jsonify
-import os, json, requests, re
-from datetime import datetime
+import os, requests, re, json, datetime
 
 app = Flask(__name__)
 
+BOT_VERSION = "v3.6"
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-STDV_FILE = "stdv_zones.json"
-SIGNAL_FILE = "us30_memory.json"
-
-# 🔹 Speicher für aktive Trades
 active_trades = []
+signal_memory = {}
+stdv_zones = {}
+open_price = None
 
-# 🔹 Initial STDV Speicher
-stdv_zones = {
-    "open": None,
-    "zones": [],
-    "timestamp": None
-}
-
-# 🔹 Signal Memory
-signals = []
-
-# 🔹 Lot-Größen Detection
-def detect_lot_size(tag):
-    match = re.search(r"(\d+(\.\d+)?)\s*lot", tag.lower())
-    if match:
-        return float(match.group(1))
-    return 1.0
-
-# 🔹 Telegram Messaging
-def send_message(chat_id, text, parse_mode=None):
+def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     requests.post(url, json=payload)
 
-# 🔹 STDV Zones
-def calculate_stdv_zones(opening_price):
-    try:
-        base = float(opening_price)
-    except:
-        return None
-    stdv = {
-        "open": base,
-        "zones": [
-            {"label": "-5%", "value": round(base * 0.95, 2)},
-            {"label": "-4%", "value": round(base * 0.96, 2)},
-            {"label": "-3%", "value": round(base * 0.97, 2)},
-            {"label": "-2%", "value": round(base * 0.98, 2)},
-            {"label": "-1%", "value": round(base * 0.99, 2)},
-            {"label": "+1%", "value": round(base * 1.01, 2)},
-            {"label": "+2%", "value": round(base * 1.02, 2)},
-            {"label": "+3%", "value": round(base * 1.03, 2)},
-            {"label": "+4%", "value": round(base * 1.04, 2)},
-            {"label": "+5%", "value": round(base * 1.05, 2)}
-        ],
-        "timestamp": datetime.utcnow().isoformat()
-    }
-    with open(STDV_FILE, "w") as f:
-        json.dump(stdv, f)
-    return stdv
-
-# 🔹 Webhook Signal Processing
-def process_signal(text):
-    text = text.strip()
-    signal = {
-        "text": text,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-    signals.append(signal)
-    with open(SIGNAL_FILE, "w") as f:
-        json.dump(signals, f)
-
-# 🔹 /trade parser
-def parse_trade(text):
-    pattern = r"/trade.*?(?P<symbol>US30).*?(?P<dir>long|short).*?(?P<entry>\d+(?:\.\d+)?)(?:.*?SL[:= ](?P<sl>\d+(?:\.\d+)?))?(?:.*?TP[:= ](?P<tp>\d+(?:\.\d+)?))?(?:.*?score[:= ](?P<score>\d+))?(?:.*?tag[:= ](?P<tag>.+))?"
+def parse_trade_command(text):
+    pattern = r"/trade(?=.*\b(?P<symbol>\w+)\b)(?=.*\b(?P<direction>long|short)\b)(?=.*\b(?P<entry>\d+(?:\.\d+)?)\b)(?:.*?SL=(?P<sl>\d+(?:\.\d+)?))?(?:.*?TP=(?P<tp>\d+(?:\.\d+)?))?(?:.*?score=(?P<score>\d+))?(?:.*?tag=(?P<tag>[^\n]+))?"
     match = re.search(pattern, text, re.IGNORECASE)
     if not match:
         return None
-    d = match.groupdict()
+    data = match.groupdict()
     return {
-        "symbol": d["symbol"].upper(),
-        "direction": d["dir"].lower(),
-        "entry": float(d["entry"]),
-        "sl": float(d["sl"]) if d["sl"] else None,
-        "tp": float(d["tp"]) if d["tp"] else None,
-        "score": int(d["score"]) if d["score"] else None,
-        "tag": d["tag"].strip() if d["tag"] else "",
-        "lot": detect_lot_size(d["tag"] or "")
+        "symbol": data["symbol"].upper(),
+        "direction": data["direction"].lower(),
+        "entry": float(data["entry"]),
+        "sl": float(data["sl"]) if data["sl"] else None,
+        "tp": float(data["tp"]) if data["tp"] else None,
+        "score": int(data["score"]) if data["score"] else None,
+        "tag": data["tag"].strip() if data["tag"] else "",
+        "lot": 1.0
     }
 
-# 🔹 Trade Handler
-def handle_trade(cmd, chat_id):
-    result = parse_trade(cmd)
-    if not result:
-        send_message(chat_id, "❌ Ungültiges Format. Beispiel:\n/trade US30 long 42650 SL=42500 TP=43000 score=80 tag=Breakout 2 lot")
+def parse_close_command(text):
+    if "/close all" in text:
+        return "ALL", None, text.split()[-1] if len(text.split()) > 2 else ""
+    match = re.match(r"/close (?P<symbol>\w+) (?P<entry>\d+(?:\.\d+)?)(?: (?P<tag>\w+))?", text, re.IGNORECASE)
+    if not match:
+        return None, None, None
+    data = match.groupdict()
+    return data["symbol"].upper(), float(data["entry"]), data["tag"] or ""
+
+def handle_trade_command(user_text, chat_id):
+    trade = parse_trade_command(user_text)
+    if not trade:
+        send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade US30 long 42650 SL=42500 TP=43000 score=80 tag=Breakout")
         return
-    active_trades.append(result)
-    msg = f"📥 Trade gespeichert: {result['symbol']} {result['direction']} {result['entry']}"
-    if result["sl"]: msg += f" | SL: {result['sl']}"
-    if result["tp"]: msg += f" | TP: {result['tp']}"
-    if result["score"]: msg += f" | Score: {result['score']}/100"
-    if result["tag"]: msg += f" | Tag: {result['tag']}"
+    active_trades.append(trade)
+    msg = f"📥 Neuer Trade\n<b>{trade['symbol']} {trade['direction'].upper()}</b> @ {trade['entry']:.2f} ({trade['lot']} Lot)"
+    if trade['sl']: msg += f"\n🔻 SL: {trade['sl']}"
+    if trade['tp']: msg += f"\n🎯 TP: {trade['tp']}"
+    if trade['score'] is not None: msg += f"\n📊 Score: {trade['score']}/100"
+    if trade['tag']: msg += f"\n🏷️ Tag: {trade['tag']}"
     send_message(chat_id, msg)
 
-# 🔹 /close Handler
-def handle_close(text, chat_id):
+def handle_close_command(user_text, chat_id):
     global active_trades
-    pattern = r"/close\s+(?P<symbol>\w+)\s+(?P<entry>\d+(?:\.\d+)?)(?:\s+(?P<tag>.*))?"
-    match = re.search(pattern, text, re.IGNORECASE)
-    if not match:
-        send_message(chat_id, "❌ Beispiel: /close US30 42650")
+    symbol, entry, tag = parse_close_command(user_text)
+    if not symbol:
+        send_message(chat_id, "❌ Bitte gib die Position an, z.B. /close US30 42650")
         return
-    d = match.groupdict()
-    entry = float(d["entry"])
-    before = len(active_trades)
-    active_trades = [t for t in active_trades if not (t["symbol"] == d["symbol"].upper() and t["entry"] == entry)]
-    after = len(active_trades)
-    if before > after:
-        send_message(chat_id, f"✅ Position {d['symbol']} @ {entry} geschlossen. {d['tag'] or ''}")
-    else:
-        send_message(chat_id, "⚠️ Keine passende Position gefunden.")
+    if symbol == "ALL":
+        count = len(active_trades)
+        active_trades = []
+        send_message(chat_id, f"🛑 Alle {count} offenen Positionen geschlossen.")
+        return
+    original = len(active_trades)
+    active_trades = [t for t in active_trades if not (t['symbol'] == symbol and t['entry'] == entry)]
+    closed = original - len(active_trades)
+    msg = f"✅ {closed}x Position {symbol} @ {entry} geschlossen. Tag: {tag}" if closed else "⚠️ Keine passende Position gefunden."
+    send_message(chat_id, msg)
 
-# 🔹 /status Handler
 def handle_status(chat_id):
     if not active_trades:
         send_message(chat_id, "📊 Keine offenen Positionen.")
         return
-
-    longs = [t for t in active_trades if t["direction"] == "long"]
-    shorts = [t for t in active_trades if t["direction"] == "short"]
-
-    msg = "📈 *Offene Positionen*\n\n"
-
-    # Longs (grün)
+    longs = [t for t in active_trades if t['direction'] == "long"]
+    shorts = [t for t in active_trades if t['direction'] == "short"]
+    msg = f"<b>📈 Offene Positionen ({len(active_trades)}):</b>\n"
     if longs:
-        msg += f"🟢 *Longs* ({len(longs)}):\n"
+        msg += "\n<b>🟢 LONGS:</b>\n"
         for t in longs:
-            msg += f"• {t['lot']} lot @ {t['entry']}"
+            msg += f"• {t['lot']} Lot @ {t['entry']}"
             if t['tp']: msg += f" → TP {t['tp']}"
             if t['sl']: msg += f", SL {t['sl']}"
-            if t['tag']: msg += f" – _{t['tag']}_"
+            if t['tag']: msg += f" – {t['tag']}"
             msg += "\n"
-        msg += "\n"
-
-    # Shorts (rot)
     if shorts:
-        msg += f"🔴 *Shorts* ({len(shorts)}):\n"
+        msg += "\n<b>🔴 SHORTS:</b>\n"
         for t in shorts:
-            msg += f"• {t['lot']} lot @ {t['entry']}"
+            msg += f"• {t['lot']} Lot @ {t['entry']}"
             if t['tp']: msg += f" → TP {t['tp']}"
             if t['sl']: msg += f", SL {t['sl']}"
-            if t['tag']: msg += f" – _{t['tag']}_"
+            if t['tag']: msg += f" – {t['tag']}"
             msg += "\n"
-
-    send_message(chat_id, msg, parse_mode="Markdown")
-
-# 🔹 /zones Handler
-def handle_zones(chat_id):
-    try:
-        with open(STDV_FILE) as f:
-            z = json.load(f)
-    except:
-        send_message(chat_id, "⚠️ Keine STDV-Zonen gespeichert.")
-        return
-    msg = f"📊 STDV Zonen (Basis: {z['open']})\n🔵 Opening: {z['open']}\n"
-    for zone in z["zones"]:
-        color = "🟥" if "-" in zone["label"] else "🟩"
-        msg += f"{color} {zone['label']}: {zone['value']}\n"
     send_message(chat_id, msg)
 
-# 🔹 /batch Handler
-def handle_batch(text, chat_id):
-    global active_trades
-    lines = text.split("\n")
-    count = 0
-    for line in lines:
-        line = line.strip()
-        if not line or "|" not in line:
-            continue
-        try:
-            direction, rest = line.split("|", 1)
-            direction = direction.strip().upper()
-            parts = [p.strip() for p in rest.split("|")]
-            lot = float(re.search(r"([\d.]+)", parts[0]).group(1))
-            entry = float(re.search(r"@ ([\d.]+)", parts[0]).group(1))
-            tp_match = re.search(r"TP: ([\d.]+)", parts[1]) if len(parts) > 1 else None
-            tp = float(tp_match.group(1)) if tp_match else None
-            sl_match = re.search(r"SL: ([\d.]+)", parts[1]) if len(parts) > 1 else None
-            sl = float(sl_match.group(1)) if sl_match else None
-            tag = parts[2].replace("Tag:", "").strip() if len(parts) > 2 else ""
-            symbol = "US30"
+def handle_help(chat_id):
+    msg = f"<b>🤖 US30 Trading Bot – {BOT_VERSION}</b>\n\n"
+    msg += "📘 <b>Befehle:</b>\n"
+    msg += "/status – offene Positionen\n"
+    msg += "/trade – Trade-Setup senden\n"
+    msg += "/close – Position schließen\n"
+    msg += "/batch – Mehrere Positionen senden\n"
+    msg += "/OpenPrice [Preis] – Opening-Preis setzen\n"
+    msg += "/zones – STDV Zonen anzeigen\n"
+    msg += "/update – STDV Zonen aktualisieren\n"
+    msg += "/signals – aktive Signale anzeigen\n"
+    msg += "/resetsignals – Signal-Speicher löschen\n"
+    msg += "/help – Hilfe anzeigen"
+    send_message(chat_id, msg)
 
-            active_trades.append({
-                "symbol": symbol,
-                "direction": direction.lower(),
-                "entry": entry,
-                "tp": tp,
-                "sl": sl,
-                "lot": lot,
-                "tag": tag,
-                "score": None
-            })
-            count += 1
-        except Exception as e:
-            print(f"⚠️ Fehler beim Parsen der Zeile: {line} – {e}")
-            continue
+def handle_signals(chat_id):
+    if not signal_memory:
+        send_message(chat_id, "📡 Kein aktives Signal im Speicher.")
+        return
+    msg = "<b>🧠 Aktive Signale:</b>\n"
+    for key, val in signal_memory.items():
+        ts = val.get("time", "–")
+        score = val.get("score", "–")
+        msg += f"• <b>{key}</b>: Score {score} @ {ts}\n"
+    send_message(chat_id, msg)
 
-    send_message(chat_id, f"📥 {count} Trades hinzugefügt über /batch.")
+@app.route("/")
+def home():
+    return f"US30 Bot {BOT_VERSION} läuft ✅"
 
-
-# 🔹 Webhook Endpoint
 @app.route("/telegram", methods=["POST"])
 def telegram():
     data = request.get_json()
-    if not data or "message" not in data:
-        return jsonify({"ok": True}), 200
-    text = data["message"].get("text", "").strip()
-    chat_id = data["message"]["chat"]["id"]
-
+    if not data: return jsonify({"status": "error"}), 400
+    msg = data.get("message", {})
+    text = msg.get("text", "")
+    chat_id = msg.get("chat", {}).get("id", "")
+    
     if text.lower().startswith("/status"):
         handle_status(chat_id)
     elif text.lower().startswith("/trade"):
-        handle_trade(text, chat_id)
+        handle_trade_command(text, chat_id)
     elif text.lower().startswith("/close"):
-        handle_close(text, chat_id)
-    elif text.lower().startswith("/zones"):
-        handle_zones(chat_id)
-    elif text.lower().startswith("/openprice"):
-        price = re.findall(r"\d+(?:\.\d+)?", text)
-        if price:
-            zone = calculate_stdv_zones(price[0])
-            if zone:
-                send_message(chat_id, f"📌 Opening Price gesetzt: {zone['open']}")
-            else:
-                send_message(chat_id, "⚠️ Fehler beim Setzen des Preises.")
-    elif text.lower().startswith("/update"):
-        handle_zones(chat_id)
+        handle_close_command(text, chat_id)
+    elif text.lower().startswith("/signals"):
+        handle_signals(chat_id)
     elif text.lower().startswith("/resetsignals"):
-        global signals
-        signals = []
-        with open(SIGNAL_FILE, "w") as f:
-            json.dump(signals, f)
-        send_message(chat_id, "🧹 Signal-Speicher wurde gelöscht.")
-    elif text.lower().startswith("/batch"):
-        handle_batch(text, chat_id)
+        signal_memory.clear()
+        send_message(chat_id, "♻️ Alle aktiven Signale wurden gelöscht.")
     elif text.lower().startswith("/help"):
-        send_message(chat_id, "📘 Befehle:\n/status – offene Positionen\n/trade – Trade-Setup senden\n/close – Position schließen\n/update – STDV Zones aktualisieren\n/OpenPrice 44100 – STDV Startpreis setzen\n/zones – STDV Zonen anzeigen\n/resetsignals – Signal-Speicher leeren\n/batch – Mehrere Trades senden\n/help – Hilfe anzeigen")
+        handle_help(chat_id)
     else:
-        process_signal(text)
-        send_message(chat_id, f"📩 Signal empfangen: {text}")
+        send_message(chat_id, "❓ Unbekannter Befehl. Nutze /help für alle Optionen.")
 
-    return jsonify({"ok": True})
+    return jsonify({"status": "ok"}), 200
