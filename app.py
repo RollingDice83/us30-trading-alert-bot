@@ -114,25 +114,26 @@ def handle_batch(text, chat_id):
     trades = []
     lines = text.strip().split("\n")
     for line in lines:
-        if line.strip().upper().startswith("LONG") or line.strip().upper().startswith("SHORT"):
+        line = line.strip()
+        if line.upper().startswith("LONG") or line.upper().startswith("SHORT"):
             try:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) < 4:
-                    continue
-                direction = parts[0].strip().lower()
-                lot = float(parts[1].split()[0])
-                entry_match = re.search(r"@(\d+(?:\.\d+)?)", parts[1])
-                tp_match = re.search(r"TP: (\d+(?:\.\d+)?)", parts[2])
-                sl = parts[3].split(":")[-1].strip()
-                tag = parts[4].split(":")[-1].strip() if len(parts) > 4 else "n/a"
+                direction_match = re.match(r"(LONG|SHORT)", line, re.IGNORECASE)
+                lot_match = re.search(r"(\d+(?:\.\d+)?) lot", line)
+                entry_match = re.search(r"@(\d+(?:\.\d+)?)", line)
+                tp_match = re.search(r"TP: ([\d\.]+|open)", line)
+                sl_match = re.search(r"SL: ([\d\.]+|manual)", line)
+                tag_match = re.search(r"Tag: (.+)$", line)
 
-                if not entry_match:
-                    continue
+                direction = direction_match.group(1).lower()
+                lot = float(lot_match.group(1)) if lot_match else 1.0
                 entry = float(entry_match.group(1))
-                tp = float(tp_match.group(1)) if tp_match else "open"
+                tp = tp_match.group(1) if tp_match else "open"
+                sl = sl_match.group(1) if sl_match else "manual"
+                tag = tag_match.group(1).strip() if tag_match else "manual"
 
                 trades.append({"direction": direction, "lot": lot, "entry": entry, "tp": tp, "sl": sl, "tag": tag})
-            except:
+            except Exception as e:
+                print("Fehler beim Parsen einer Zeile:", line, "Fehler:", str(e))
                 continue
     if trades:
         active_trades.extend(trades)
