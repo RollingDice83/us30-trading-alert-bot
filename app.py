@@ -7,7 +7,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 active_trades = []
 signal_store_path = "us30_memory.json"
-version = "v3.8"
+version = "3.8"
 
 # === Helper Functions ===
 
@@ -126,4 +126,3 @@ def telegram():
 @app.route("/")
 def index():
     return "US30-Bot läuft ✅"
-
