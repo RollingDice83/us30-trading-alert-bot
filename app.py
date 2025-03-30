@@ -1,154 +1,142 @@
 import json
 import re
-import requests
+import os
 from flask import Flask, request
-from datetime import datetime
 
 app = Flask(__name__)
 
-BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
 VERSION = "v4.0.2"
+
 active_trades = []
 signal_memory = []
 open_price = None
 
-# --- Hilfsfunktionen ---
-def send_message(chat_id, text):
-    requests.post(TELEGRAM_API_URL, json={"chat_id": chat_id, "text": text})
+@app.route("/", methods=["GET"])
+def home():
+    return "US30 Bot Live"
 
-def parse_trade_command(text):
-    match = re.search(r"/trade (long|short) (\d+(\.\d+)?) SL=(\d+(\.\d+)?) TP=(\d+(\.\d+)?)", text, re.IGNORECASE)
-    if match:
-        direction, entry, _, sl, _, tp, _ = match.groups()
-        return {
-            "direction": direction.lower(),
+@app.route("/telegram", methods=["POST"])
+def telegram():
+    data = request.json
+    if not data or "message" not in data:
+        return "ok"
+
+    message = data["message"]
+    chat_id = message["chat"]["id"]
+    text = message.get("text", "")
+
+    if text.lower().startswith("/help"):
+        return send_message(chat_id, f"📘 Befehle ({VERSION}):\n/status – offene Positionen\n/trade – Setup senden\n/close – Trade schließen\n/update – STDV aktualisieren\n/openprice – STDV Startpreis setzen\n/zones – STDV Zonen anzeigen\n/signals – aktuelle Signale\n/resetsignals – Signal-Reset\n/batch – mehrere Trades")
+
+    elif text.lower().startswith("/status"):
+        return send_message(chat_id, format_status())
+
+    elif text.lower().startswith("/trade"):
+        return handle_trade(text, chat_id)
+
+    elif text.lower().startswith("/batch"):
+        return handle_batch(text, chat_id)
+
+    elif text.lower().startswith("/openprice"):
+        return handle_open_price(text, chat_id)
+
+    elif text.lower().startswith("/resetsignals"):
+        signal_memory.clear()
+        return send_message(chat_id, "♻️ Signal-Speicher geleert.")
+
+    elif text.lower().startswith("/signals"):
+        return send_message(chat_id, format_signals())
+
+    return "ok"
+
+def send_message(chat_id, text):
+    print(f"SEND TO {chat_id}: {text}")
+    return "ok"
+
+def handle_trade(text, chat_id):
+    try:
+        pattern = r"/trade\s+(long|short)\s+(\d+(?:\.\d+)?)\s+SL=(\d+(?:\.\d+)?)\s+TP=(\d+(?:\.\d+)?)"
+        match = re.search(pattern, text.lower())
+        if not match:
+            return send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade long 42500 SL=42250 TP=43200")
+
+        direction, entry, sl, tp = match.groups()
+        active_trades.append({
+            "type": direction,
             "entry": float(entry),
             "sl": float(sl),
             "tp": float(tp),
             "tag": "manual"
-        }
-    return None
+        })
+        return send_message(chat_id, f"✅ {direction.upper()} @ {entry} gespeichert.")
+    except Exception as e:
+        return send_message(chat_id, f"❌ Fehler: {str(e)}")
 
-def format_trades():
-    longs = [t for t in active_trades if t['direction'] == 'long']
-    shorts = [t for t in active_trades if t['direction'] == 'short']
-    
-    text = "📈 Offene Positionen\n"
-    total_longs = sum(t['lot'] for t in longs)
-    total_shorts = sum(t['lot'] for t in shorts)
+def handle_batch(text, chat_id):
+    lines = text.strip().split("\n")
+    count = 0
+    for line in lines:
+        if "lot @" in line and "TP:" in line:
+            try:
+                type_match = re.search(r"(LONG|SHORT)", line)
+                lot_match = re.search(r"(\d+(\.\d+)?) lot", line)
+                entry_match = re.search(r"@ (\d+(\.\d+)?)", line)
+                tp_match = re.search(r"TP: (\d+(\.\d+)?|open)", line)
+                sl_match = re.search(r"SL: (\d+(\.\d+)?|manual|none)", line)
+                tag_match = re.search(r"Tag: (\w+)", line)
 
-    if longs:
-        text += f"\n🟢 Longs ({len(longs)} | {total_longs} lot):"
-        for t in longs:
-            text += f"\n• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}"
+                trade = {
+                    "type": type_match.group(1).lower(),
+                    "lot": float(lot_match.group(1)),
+                    "entry": float(entry_match.group(1)),
+                    "tp": tp_match.group(1) if tp_match else "open",
+                    "sl": sl_match.group(1) if sl_match else "manual",
+                    "tag": tag_match.group(1) if tag_match else "none"
+                }
+                active_trades.append(trade)
+                count += 1
+            except:
+                continue
 
-    if shorts:
-        text += f"\n\n🔴 Shorts ({len(shorts)} | {total_shorts} lot):"
-        for t in shorts:
-            text += f"\n• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}"
-
-    return text or "Keine offenen Positionen."
-
-def parse_batch(text):
-    trades = []
-    for line in text.split('\n'):
-        if 'lot' not in line:
-            continue
-        try:
-            direction = 'long' if line.lower().startswith('long') else 'short'
-            lot = float(re.search(r"(\d+(\.\d+)?) lot", line).group(1))
-            entry = float(re.search(r"@ (\d+(\.\d+)?)", line).group(1))
-            tp_match = re.search(r"TP: (\d+(\.\d+)?|open)", line)
-            sl_match = re.search(r"SL: (\d+(\.\d+)?|manual)", line)
-            tag_match = re.search(r"Tag: (\w+)", line)
-            
-            tp = tp_match.group(1) if tp_match else 'open'
-            sl = sl_match.group(1) if sl_match else 'manual'
-            tag = tag_match.group(1) if tag_match else 'manual'
-            
-            trade = {
-                "direction": direction,
-                "lot": lot,
-                "entry": entry,
-                "tp": float(tp) if tp != 'open' else 'open',
-                "sl": float(sl) if sl != 'manual' else 'manual',
-                "tag": tag
-            }
-            trades.append(trade)
-        except Exception as e:
-            print(f"Fehler beim Parsen einer Zeile: {line} Fehler: {e}")
-    return trades
-
-# --- Routen ---
-@app.route("/")
-def index():
-    return "US30 Bot Online"
-
-@app.route("/telegram", methods=['POST'])
-def telegram():
-    data = request.json
-    chat_id = data['message']['chat']['id']
-    text = data['message'].get('text', '').strip()
-
-    if text.lower().startswith("/help"):
-        help_text = f"📘 Befehle ({VERSION}):\n"
-        help_text += "/status – offene Positionen\n"
-        help_text += "/trade – Setup senden\n"
-        help_text += "/close – Trade schließen\n"
-        help_text += "/update – STDV aktualisieren\n"
-        help_text += "/openprice – STDV Startpreis setzen\n"
-        help_text += "/zones – STDV Zonen anzeigen\n"
-        help_text += "/signals – aktuelle Signale\n"
-        help_text += "/resetsignals – Signal-Reset\n"
-        help_text += "/batch – mehrere Trades"
-        send_message(chat_id, help_text)
-
-    elif text.lower().startswith("/status"):
-        send_message(chat_id, format_trades())
-
-    elif text.lower().startswith("/trade"):
-        trade = parse_trade_command(text)
-        if trade:
-            trade['lot'] = 1.0
-            active_trades.append(trade)
-            send_message(chat_id, f"✅ Trade gespeichert: {trade['direction'].upper()} @ {trade['entry']} TP {trade['tp']} SL {trade['sl']}")
-        else:
-            send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade long 42500 SL=42250 TP=43200")
-
-    elif text.lower().startswith("/batch"):
-        trades = parse_batch(text)
-        if trades:
-            active_trades.extend(trades)
-            send_message(chat_id, f"✅ {len(trades)} Trades hinzugefügt.")
-        else:
-            send_message(chat_id, "⚠️ Keine gültigen Trades erkannt.")
-
-    elif text.lower().startswith("/openprice"):
-        match = re.search(r"/openprice (\d+(\.\d+)?)", text, re.IGNORECASE)
-        if match:
-            global open_price
-            open_price = float(match.group(1))
-            send_message(chat_id, f"📌 Opening Price gesetzt: {open_price}")
-        else:
-            send_message(chat_id, "❌ Bitte gib den Opening Preis an. Beispiel: /openprice 44100")
-
-    elif text.lower().startswith("/resetsignals"):
-        signal_memory.clear()
-        send_message(chat_id, "🧹 Signal-Speicher wurde geleert.")
-
-    elif text.lower().startswith("/signals"):
-        if not signal_memory:
-            send_message(chat_id, "ℹ️ Keine gespeicherten Signale.")
-        else:
-            message = "🧠 Gespeicherte Signale:\n" + "\n".join(signal_memory[-10:])
-            send_message(chat_id, message)
-
+    if count == 0:
+        return send_message(chat_id, "⚠️ Keine gültigen Trades erkannt.")
     else:
-        send_message(chat_id, "❓ Unbekannter Befehl. Nutze /help für alle Optionen.")
+        return send_message(chat_id, f"✅ {count} Trades gespeichert.")
 
-    return "ok"
+def format_status():
+    if not active_trades:
+        return "ℹ️ Keine aktiven Positionen."
+
+    longs = [t for t in active_trades if t["type"] == "long"]
+    shorts = [t for t in active_trades if t["type"] == "short"]
+
+    msg = "📈 Offene Positionen\n\n"
+    if longs:
+        msg += f"🟢 Longs ({len(longs)}):\n"
+        for t in longs:
+            msg += f"• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}\n"
+    if shorts:
+        msg += f"\n🔴 Shorts ({len(shorts)}):\n"
+        for t in shorts:
+            msg += f"• {t['lot']} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}\n"
+
+    return msg
+
+def handle_open_price(text, chat_id):
+    global open_price
+    try:
+        match = re.search(r"/openprice (\d+(?:\.\d+)?)", text.lower())
+        if not match:
+            return send_message(chat_id, "❌ Bitte gib einen gültigen Preis an. Beispiel: /openprice 44100")
+        open_price = float(match.group(1))
+        return send_message(chat_id, f"📍 Opening Price gesetzt: {open_price}")
+    except:
+        return send_message(chat_id, "❌ Fehler beim Setzen des Opening Prices.")
+
+def format_signals():
+    if not signal_memory:
+        return "ℹ️ Keine aktiven Signale."
+    return "📡 Aktive Signale:\n" + "\n".join(signal_memory)
 
 if __name__ == "__main__":
     app.run(debug=True)
