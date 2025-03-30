@@ -91,7 +91,7 @@ def score_signals():
 # === Command Handlers ===
 
 def handle_openprice(text, chat_id):
-    match = re.search(r"/openprice\s+(\d+(?:\.\d+)?)", text.lower())
+    match = re.search(r"/openprice\\s+(\\d+(?:\\.\\d+)?)", text.lower())
     if match:
         price = float(match.group(1))
         set_opening_price(price)
@@ -115,6 +115,18 @@ def handle_signal_push(data):
             msg = f"📊 Signal-Vorschlag (Score {score}/100)\nUS30 Long\nEntry: TBD\nSL: TBD\nTP: TBD\n➕ {', '.join(reasons)}"
             send_message(TELEGRAM_CHAT_ID, msg)
 
+def handle_signals(text, chat_id):
+    signals = load_signals()
+    if not signals:
+        send_message(chat_id, "ℹ️ Keine aktiven Signale gespeichert.")
+    else:
+        msg = "📍 Aktive Signale:\n"
+        for s in signals[-10:]:
+            msg += f"• {s['text']} ({s['time'].split('T')[1]})\n"
+        score, reasons = score_signals()
+        msg += f"\n🧠 Aktueller Score: {score}/100\n➕ {', '.join(reasons)}"
+        send_message(chat_id, msg)
+
 # === Webhook ===
 
 @app.route("/telegram", methods=["POST"])
@@ -130,6 +142,11 @@ def telegram():
         handle_openprice(text, chat_id)
     elif text.lower().startswith("/help"):
         send_message(chat_id, f"📘 Befehle (v{version}):\n/openprice – STDV setzen\n/signals – akt. Signale\n/resetsignals – leeren")
+    elif text.lower().startswith("/signals"):
+        handle_signals(text, chat_id)
+    elif text.lower().startswith("/resetsignals"):
+        reset_signals()
+        send_message(chat_id, "✅ Signal-Speicher gelöscht.")
     else:
         handle_signal_push(msg)
 
@@ -137,6 +154,6 @@ def telegram():
 
 @app.route("/")
 def index():
-    return "US30-Bot v4.0 läuft ✅"
-0
+    return f"US30-Bot v{version} läuft ✅"
+
 # --- ENDE: US30 Telegram Bot v4.0 ---
