@@ -32,11 +32,9 @@ def score_signals():
     signals = load_signals()
     now = datetime.utcnow()
     active = [s for s in signals if datetime.strptime(s["time"], "%Y-%m-%dT%H:%M:%S") > now - timedelta(minutes=45)]
-
     tags = [s["text"] for s in active]
     score = 0
     reasons = []
-
     if any("RSI" in t and "<30" in t for t in tags):
         score += 20
         reasons.append("RSI < 30")
@@ -54,7 +52,6 @@ def score_signals():
         reasons.append("Preis Break")
     if len(reasons) >= 3:
         score += 10
-
     return score, reasons
 
 # === Command Handlers ===
@@ -72,6 +69,29 @@ def handle_status(chat_id):
     for t in shorts:
         msg += f"• {t['lot']} lot @ {t['entry']} → TP {t.get('tp', 'open')} – SL: {t.get('sl','manual')}\n"
     send_message(chat_id, msg)
+
+def handle_trade(text, chat_id):
+    match = re.search(r"(long|short) (\d+(?:\.\d+)?) SL=(\d+(?:\.\d+)?) TP=(\d+(?:\.\d+)?)", text.lower())
+    if not match:
+        send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade long 42500 SL=42250 TP=43200")
+        return
+    direction, entry, sl, tp = match.groups()
+    trade = {"direction": direction, "entry": float(entry), "sl": float(sl), "tp": float(tp), "lot": 1.0, "tag": "manual"}
+    active_trades.append(trade)
+    send_message(chat_id, f"✅ Trade hinzugefügt: {direction.upper()} @ {entry}")
+
+def handle_close(text, chat_id):
+    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    if not match:
+        send_message(chat_id, "❌ Bitte gib den Entry-Preis an. Beispiel: /close 42500")
+        return
+    entry = float(match.group(1))
+    for t in active_trades:
+        if t["entry"] == entry:
+            active_trades.remove(t)
+            send_message(chat_id, f"❎ Position @ {entry} geschlossen.")
+            return
+    send_message(chat_id, "⚠️ Keine passende Position gefunden.")
 
 def handle_resetsignals(chat_id):
     reset_signals()
@@ -99,8 +119,8 @@ def handle_batch(text, chat_id):
                 parts = line.split("|")
                 direction = parts[0].strip().lower()
                 lot = float(parts[1].split()[0])
-                entry = float(re.search(r"@(.*?)\\s", parts[1]).group(1))
-                tp = float(re.search(r"TP: ([\\d.]+)", parts[2]).group(1)) if "TP:" in parts[2] else "open"
+                entry = float(re.search(r"@(\d+(?:\.\d+)?)", parts[1]).group(1))
+                tp = float(re.search(r"TP: (\d+(?:\.\d+)?)", parts[2]).group(1)) if "TP:" in parts[2] else "open"
                 sl = parts[3].split(":")[-1].strip()
                 tag = parts[4].split(":")[-1].strip() if len(parts) > 4 else "n/a"
                 trades.append({"direction": direction, "lot": lot, "entry": entry, "tp": tp, "sl": sl, "tag": tag})
@@ -137,6 +157,10 @@ def telegram():
 
     if text.lower().startswith("/status"):
         handle_status(chat_id)
+    elif text.lower().startswith("/trade"):
+        handle_trade(text, chat_id)
+    elif text.lower().startswith("/close"):
+        handle_close(text, chat_id)
     elif text.lower().startswith("/resetsignals"):
         handle_resetsignals(chat_id)
     elif text.lower().startswith("/signals"):
