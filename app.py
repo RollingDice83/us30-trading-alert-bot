@@ -1,3 +1,5 @@
+# --- ANFANG: US30 Telegram Bot v3.9.3 ---
+
 from flask import Flask, request, jsonify
 import os, re, json, requests
 from datetime import datetime, timedelta
@@ -7,7 +9,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 active_trades = []
 signal_store_path = "us30_memory.json"
-version = "3.9.2"
+version = "3.9.3"
 
 # === Helper Functions ===
 
@@ -71,7 +73,7 @@ def handle_status(chat_id):
     send_message(chat_id, msg)
 
 def handle_trade(text, chat_id):
-    match = re.search(r"(long|short) (\d+(?:\.\d+)?) SL=(\d+(?:\.\d+)?) TP=(\d+(?:\.\d+)?)", text.lower())
+    match = re.search(r"(long|short)\s+(\d+(?:\.\d+)?)\s+sl=(\d+(?:\.\d+)?)\s+tp=(\d+(?:\.\d+)?)", text.lower())
     if not match:
         send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade long 42500 SL=42250 TP=43200")
         return
@@ -114,32 +116,42 @@ def handle_batch(text, chat_id):
     trades = []
     lines = text.strip().split("\n")
     for line in lines:
-        line = line.strip()
-        if line.upper().startswith("LONG") or line.upper().startswith("SHORT"):
-            try:
-                direction_match = re.match(r"(LONG|SHORT)", line, re.IGNORECASE)
-                lot_match = re.search(r"(\d+(?:\.\d+)?) lot", line)
-                entry_match = re.search(r"@(\d+(?:\.\d+)?)", line)
-                tp_match = re.search(r"TP: ([\d\.]+|open)", line)
-                sl_match = re.search(r"SL: ([\d\.]+|manual)", line)
-                tag_match = re.search(r"Tag: (.+)$", line)
+        if "lot @" not in line:
+            continue
+        try:
+            direction = "long" if "long" in line.lower() else "short"
+            lot = float(re.search(r"(\d+(?:\.\d+)?) lot", line).group(1))
+            entry = float(re.search(r"@ (\d+(?:\.\d+)?)", line).group(1))
+            tp_match = re.search(r"TP: ([\d\.]+|open)", line)
+            sl_match = re.search(r"SL: ([\d\.]+|manual)", line)
+            tag_match = re.search(r"Tag: (.+)$", line)
 
-                direction = direction_match.group(1).lower()
-                lot = float(lot_match.group(1)) if lot_match else 1.0
-                entry = float(entry_match.group(1))
-                tp = tp_match.group(1) if tp_match else "open"
-                sl = sl_match.group(1) if sl_match else "manual"
-                tag = tag_match.group(1).strip() if tag_match else "manual"
+            tp = tp_match.group(1) if tp_match else "open"
+            sl = sl_match.group(1) if sl_match else "manual"
+            tag = tag_match.group(1).strip() if tag_match else "manual"
 
-                trades.append({"direction": direction, "lot": lot, "entry": entry, "tp": tp, "sl": sl, "tag": tag})
-            except Exception as e:
-                print("Fehler beim Parsen einer Zeile:", line, "Fehler:", str(e))
-                continue
+            trades.append({"direction": direction, "lot": lot, "entry": entry, "tp": tp, "sl": sl, "tag": tag})
+        except Exception as e:
+            print("⚠️ Fehler beim Parsen:", e)
+            continue
     if trades:
         active_trades.extend(trades)
         send_message(chat_id, f"✅ {len(trades)} Trades hinzugefügt.")
     else:
         send_message(chat_id, "⚠️ Keine gültigen Trades erkannt.")
+
+def handle_openprice(text, chat_id):
+    match = re.search(r"/openprice\s+(\d+(?:\.\d+)?)", text.lower())
+    if match:
+        open_price = float(match.group(1))
+        zones = {f"{i:+d}%": round(open_price * (1 + i / 100), 2) for i in range(-5, 6)}
+        msg = "📊 STDV Zonen:\n"
+        for k, v in zones.items():
+            color = "🟥" if "-" in k else "🟩" if "+" in k else "🔵"
+            msg += f"{color} {k}: {v}\n"
+        send_message(chat_id, msg)
+    else:
+        send_message(chat_id, "❌ Ungültiger /openprice-Befehl. Beispiel: /openprice 44100")
 
 def handle_signal_push(data):
     text = data.get("text", "").strip()
@@ -159,7 +171,6 @@ def telegram():
     data = request.get_json()
     if not data or "message" not in data:
         return jsonify({"status": "ignored"}), 200
-
     msg = data["message"]
     chat_id = msg["chat"]["id"]
     text = msg.get("text", "").strip()
@@ -176,8 +187,10 @@ def telegram():
         handle_signals(chat_id)
     elif text.lower().startswith("/batch"):
         handle_batch(text, chat_id)
+    elif text.lower().startswith("/openprice"):
+        handle_openprice(text, chat_id)
     elif text.lower().startswith("/help"):
-        send_message(chat_id, f"📘 Befehle (v{version}):\n/status – offene Positionen\n/trade – Setup senden\n/close – Trade schließen\n/update – STDV aktualisieren\n/openprice – STDV Startpreis setzen\n/zones – STDV Zonen anzeigen\n/signals – aktuelle Signale\n/resetsignals – Signal-Reset\n/batch – mehrere Trades")
+        send_message(chat_id, f"📘 Befehle (v{version}):\n/status – Positionen\n/trade – Setup\n/close – schließen\n/openprice – STDV Start\n/signals – aktive Signale\n/resetsignals – leeren\n/batch – Multi-Trades")
     else:
         handle_signal_push(msg)
 
@@ -186,3 +199,5 @@ def telegram():
 @app.route("/")
 def index():
     return "US30-Bot läuft ✅"
+
+# --- ENDE: US30 Telegram Bot v3.9.3 ---
