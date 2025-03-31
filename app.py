@@ -8,7 +8,7 @@ import requests
 
 app = Flask(__name__)
 
-VERSION = "v4.5-fixed"
+VERSION = "v4.6"
 
 active_trades = []
 signal_memory = []
@@ -137,7 +137,34 @@ def handle_trade(text, chat_id):
     return send_message(chat_id, f"✅ {direction.upper()} Trade @ {entry} gespeichert.")
 
 def handle_batch(text, chat_id):
-    return send_message(chat_id, "⚙️ Batch-Funktion in Bearbeitung.")
+    lines = text.strip().split("\n")
+    count = 0
+    for line in lines:
+        if "lot @" in line and "TP:" in line:
+            try:
+                type_match = re.search(r"(LONG|SHORT)", line)
+                lot_match = re.search(r"(\d+(\.\d+)?) lot", line)
+                entry_match = re.search(r"@ (\d+(\.\d+)?)", line)
+                tp_match = re.search(r"TP: (\d+(\.\d+)?|open)", line)
+                sl_match = re.search(r"SL: (\d+(\.\d+)?|manual|none)", line)
+                tag_match = re.search(r"Tag: (\w+)", line)
+
+                trade = {
+                    "type": type_match.group(1).lower(),
+                    "lot": float(lot_match.group(1)),
+                    "entry": float(entry_match.group(1)),
+                    "tp": tp_match.group(1) if tp_match else "open",
+                    "sl": sl_match.group(1) if sl_match else "manual",
+                    "tag": tag_match.group(1) if tag_match else "none"
+                }
+                active_trades.append(trade)
+                count += 1
+            except:
+                continue
+    if count == 0:
+        return send_message(chat_id, "⚠️ Keine gültigen Trades erkannt.")
+    else:
+        return send_message(chat_id, f"✅ {count} Trades gespeichert.")
 
 def handle_open_price(text, chat_id):
     global open_price
@@ -150,9 +177,19 @@ def handle_open_price(text, chat_id):
 def format_status():
     if not active_trades:
         return "ℹ️ Keine aktiven Positionen."
-    msg = "📈 Aktive Positionen:\n"
-    for t in active_trades:
-        msg += f"{t['type'].capitalize()} @ {t['entry']} TP: {t['tp']} SL: {t['sl']}\n"
+    longs = [t for t in active_trades if t["type"] == "long"]
+    shorts = [t for t in active_trades if t["type"] == "short"]
+    msg = "📈 Offene Positionen\n\n"
+    if longs:
+        msg += f"🟢 Longs ({len(longs)}):\n"
+        for t in longs:
+            lot = t.get("lot", 1.0)
+            msg += f"• {lot} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}\n"
+    if shorts:
+        msg += f"\n🔴 Shorts ({len(shorts)}):\n"
+        for t in shorts:
+            lot = t.get("lot", 1.0)
+            msg += f"• {lot} lot @ {t['entry']} → TP {t['tp']} – SL: {t['sl']}\n"
     return msg
 
 def handle_close(text, chat_id):
