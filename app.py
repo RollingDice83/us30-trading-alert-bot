@@ -8,7 +8,7 @@ import requests
 
 app = Flask(__name__)
 
-VERSION = "v4.5"
+VERSION = "v4.5-fixed"
 
 active_trades = []
 signal_memory = []
@@ -87,6 +87,47 @@ def get_help():
 /resetsignals – Signal-Reset
 /batch – mehrere Trades"""
 
+def parse_signal(text):
+    text_lower = text.lower()
+    score = 0
+    signals = []
+
+    rsi_match = re.search(r"rsi.*?(\d{1,2}(\.\d+)?)", text_lower)
+    if rsi_match:
+        value = float(rsi_match.group(1))
+        if value < 30:
+            score += 40
+            signals.append("RSI < 30")
+        elif value > 70:
+            score += 20
+            signals.append("RSI > 70")
+
+    if "momentum: bullish" in text_lower:
+        score += 30
+        signals.append("Momentum Bullish")
+    if "momentum: bearish" in text_lower:
+        score += 30
+        signals.append("Momentum Bearish")
+    if "mss bullish break" in text_lower:
+        score += 20
+        signals.append("MSS Bullish Break")
+    if "mss bearish break" in text_lower:
+        score += 20
+        signals.append("MSS Bearish Break")
+
+    if score > 0:
+        return (" + ".join(signals), score)
+    return (None, 0)
+
+def generate_trade_suggestion(reason, score):
+    direction = "LONG" if "bullish" in reason.lower() or "rsi < 30" in reason.lower() else "SHORT"
+    price = get_live_price()
+    if not price:
+        price = "(aktuell)"
+    sl = round(40 + (100 - score) * 0.5)
+    tp = round(100 + score)
+    return f"🚀 Tradevorschlag (Score {score})\nTyp: {direction}\nEntry: {price}\nTrigger: {reason}\nSL: {sl} Punkte\nTP: {tp} Punkte\nTag: signal-auto\nNutze /trade um manuell zu speichern."
+
 def handle_trade(text, chat_id):
     match = re.match(r'/trade (long|short) (\d+) SL=(\d+) TP=(\d+)', text, re.I)
     if not match:
@@ -126,14 +167,19 @@ def handle_close(text, chat_id):
     return send_message(chat_id, f"✅ Position bei {price} gelöscht.")
 
 def format_zones():
-    return f"📊 STDV-Zonen: [Platzhalter, Open Price: {open_price}]"
+    if open_price is None:
+        return "📊 Keine Zonen verfügbar. Bitte /openprice setzen."
+    zones = []
+    for i in range(-5, 6):
+        level = round(open_price * (1 + i / 100), 1)
+        color = "🟥" if i < 0 else ("🟩" if i > 0 else "🟩")
+        zones.append(f"{color} {i:+}%: {level}")
+    return "📊 STDV Zonen:\n" + "\n".join(zones)
 
 def format_signals():
     if not signal_memory:
         return "📡 Keine aktiven Signale."
     return "📡 Signale:\n" + "\n".join(signal_memory)
-
-# parse_signal und generate_trade_suggestion unverändert beibehalten
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
