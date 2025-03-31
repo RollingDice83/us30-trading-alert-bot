@@ -14,7 +14,6 @@ active_trades = []
 signal_memory = []
 open_price = None
 
-
 def get_live_price():
     try:
         url = "https://query1.finance.yahoo.com/v8/finance/chart/US30USD=X?interval=1m&range=1d"
@@ -25,11 +24,9 @@ def get_live_price():
     except:
         return None
 
-
 @app.route("/", methods=["GET"])
 def home():
     return "US30 Bot Live"
-
 
 @app.route("/telegram", methods=["POST"])
 def telegram():
@@ -73,15 +70,9 @@ def telegram():
 
     return send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
 
-
 def send_message(chat_id, text):
     print(f"SEND TO {chat_id}: {text}")
-    return jsonify({
-        "method": "sendMessage",
-        "chat_id": chat_id,
-        "text": text
-    })
-
+    return jsonify({"method": "sendMessage", "chat_id": chat_id, "text": text})
 
 def get_help():
     return f"""📘 Befehle ({VERSION}):
@@ -96,13 +87,12 @@ def get_help():
 /resetsignals – Signal-Reset
 /batch – mehrere Trades"""
 
-
 def parse_signal(text):
     text_lower = text.lower()
     score = 0
     signals = []
 
-    rsi_match = re.search(r"rsi\s*(\d{1,2}(\.\d+)?|\d{2})", text_lower)
+    rsi_match = re.search(r"rsi\s*(\d{1,2}(\.\d+)?)", text_lower)
     if rsi_match:
         value = float(rsi_match.group(1))
         if value < 30:
@@ -129,5 +119,21 @@ def parse_signal(text):
         return (" + ".join(signals), score)
     return (None, 0)
 
+def generate_trade_suggestion(reason, score):
+    direction = "LONG" if "bullish" in reason.lower() or "rsi < 30" in reason.lower() else "SHORT"
+    price = get_live_price()
+    if not price:
+        price = "(aktuell)"
+    sl = round(40 + (100 - score) * 0.5)
+    tp = round(100 + score)
+    return f"🚀 Tradevorschlag (Score {score})\nTyp: {direction}\nEntry: {price}\nTrigger: {reason}\nSL: {sl} Punkte\nTP: {tp} Punkte\nTag: signal-auto\nNutze /trade um manuell zu speichern."
 
-# ... Rest bleibt unverändert
+# Füge hier alle vorherigen Funktionen (handle_trade, handle_batch, format_status, etc.) unverändert hinzu
+
+if __name__ == "__main__":
+    try:
+        port = int(os.environ.get("PORT", 5000))
+        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    except Exception as e:
+        print(f"❌ Fehler beim Starten des Servers: {e}", file=sys.stderr)
+        sys.exit(1)
