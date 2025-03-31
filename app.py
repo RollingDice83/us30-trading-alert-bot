@@ -66,6 +66,9 @@ def telegram():
     elif text.lower().startswith("/close"):
         return handle_close(text, chat_id)
 
+    elif text.lower().startswith("/update"):
+        return send_message(chat_id, format_zones())
+
     parsed, score = parse_signal(text)
     if parsed:
         signal_memory.append(f"{parsed} [{time.strftime('%H:%M:%S')}] (Score {score})")
@@ -89,6 +92,7 @@ def get_help():
 /status – offene Positionen
 /trade – Setup senden
 /close [Preis] – Trade schließen
+/close all – alle Trades löschen
 /update – STDV aktualisieren
 /openprice [Preis] – STDV Startpreis setzen
 /zones – STDV Zonen anzeigen
@@ -101,12 +105,16 @@ def parse_signal(text):
     score = 0
     signals = []
 
-    if "rsi below 30" in text_lower or "rsi crossing up 30" in text_lower:
-        score += 40
-        signals.append("RSI < 30")
-    if "rsi above 70" in text_lower or "rsi crossing down 70" in text_lower:
-        score += 20
-        signals.append("RSI > 70")
+    if re.search(r"rsi.*(\d{1,2}\.\d{1,2}|\d{2})", text_lower):
+        match = re.search(r"rsi.*(\d{1,2}\.\d{1,2}|\d{2})", text_lower)
+        value = float(match.group(1))
+        if value < 30:
+            score += 40
+            signals.append("RSI < 30")
+        elif value > 70:
+            score += 20
+            signals.append("RSI > 70")
+
     if "momentum: bullish" in text_lower:
         score += 30
         signals.append("Momentum Bullish")
@@ -181,9 +189,13 @@ def format_status():
 
 def handle_close(text, chat_id):
     try:
+        if "/close all" in text.lower():
+            active_trades.clear()
+            return send_message(chat_id, "❌ Alle Positionen wurden geschlossen.")
+
         match = re.search(r"/close\s+(\d+(\.\d+)?)", text)
         if not match:
-            return send_message(chat_id, "❌ Beispiel: /close 44500")
+            return send_message(chat_id, "❌ Beispiel: /close 44500 oder /close all")
 
         price = float(match.group(1))
         removed = [t for t in active_trades if t["entry"] == price]
