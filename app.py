@@ -87,8 +87,6 @@ def get_help():
 /resetsignals – Signal-Reset
 /batch – mehrere Trades"""
 
-# Funktionen aus v4.3
-
 def handle_trade(text, chat_id):
     match = re.match(r'/trade (long|short) (\d+) SL=(\d+) TP=(\d+)', text, re.I)
     if not match:
@@ -134,6 +132,8 @@ def format_signals():
     if not signal_memory:
         return "📡 Keine aktiven Signale."
     return "📡 Signale:\n" + "\n".join(signal_memory)
+
+# parse_signal und generate_trade_suggestion unverändert beibehalten
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
