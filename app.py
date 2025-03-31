@@ -7,7 +7,7 @@ import sys
 
 app = Flask(__name__)
 
-VERSION = "v4.2"
+VERSION = "v4.3"
 
 active_trades = []
 signal_memory = []
@@ -55,10 +55,13 @@ def telegram():
     elif text.lower().startswith("/close"):
         return handle_close(text, chat_id)
 
-    parsed = parse_signal(text)
+    parsed, score = parse_signal(text)
     if parsed:
-        signal_memory.append(parsed)
-        return send_message(chat_id, f"✅ Signal gespeichert: {parsed}")
+        signal_memory.append(f"{parsed} [{time.strftime('%H:%M:%S')}] (Score {score})")
+        if score >= 60:
+            return send_message(chat_id, generate_trade_suggestion(parsed, score))
+        else:
+            return send_message(chat_id, f"✅ Signal erkannt: {parsed} (Score {score})")
 
     return send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
 
@@ -81,6 +84,40 @@ def get_help():
 /signals – aktuelle Signale
 /resetsignals – Signal-Reset
 /batch – mehrere Trades"""
+
+def parse_signal(text):
+    text_lower = text.lower()
+    score = 0
+    signals = []
+
+    if "rsi below 30" in text_lower or "rsi crossing up 30" in text_lower:
+        score += 40
+        signals.append("RSI < 30")
+    if "rsi above 70" in text_lower or "rsi crossing down 70" in text_lower:
+        score += 20
+        signals.append("RSI > 70")
+    if "momentum: bullish" in text_lower:
+        score += 30
+        signals.append("Momentum Bullish")
+    if "momentum: bearish" in text_lower:
+        score += 30
+        signals.append("Momentum Bearish")
+    if "mss bullish break" in text_lower:
+        score += 20
+        signals.append("MSS Bullish Break")
+    if "mss bearish break" in text_lower:
+        score += 20
+        signals.append("MSS Bearish Break")
+
+    if score > 0:
+        return (" + ".join(signals), score)
+    return (None, 0)
+
+def generate_trade_suggestion(reason, score):
+    direction = "LONG" if "bullish" in reason.lower() or "rsi < 30" in reason.lower() else "SHORT"
+    sl = 40
+    tp = 120
+    return f"🚀 Tradevorschlag (Score {score})\nTyp: {direction}\nTrigger: {reason}\nSL: {sl} Punkte\nTP: {tp} Punkte\nTag: signal-auto\nNutze /trade um manuell zu speichern."
 
 def handle_trade(text, chat_id):
     try:
@@ -192,18 +229,6 @@ def format_signals():
     if not signal_memory:
         return "ℹ️ Keine aktiven Signale."
     return "🛰 Aktive Signale:\n" + "\n".join(signal_memory)
-
-def parse_signal(text):
-    signal_patterns = [
-        r"rsi\s*(\d+)",
-        r"rsi.*?(\d+\.\d+)",
-        r"momentum.*?(bullish|bearish)",
-        r"mss.*?(bullish|bearish).*?break"
-    ]
-    for pattern in signal_patterns:
-        if re.search(pattern, text, re.IGNORECASE):
-            return f"{text} [{time.strftime('%H:%M:%S')}]"
-    return None
 
 if __name__ == "__main__":
     try:
