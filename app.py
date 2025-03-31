@@ -87,53 +87,54 @@ def get_help():
 /resetsignals – Signal-Reset
 /batch – mehrere Trades"""
 
-def parse_signal(text):
-    text_lower = text.lower()
-    score = 0
-    signals = []
+# Funktionen aus v4.3
 
-    rsi_match = re.search(r"rsi\s*(\d{1,2}(\.\d+)?)", text_lower)
-    if rsi_match:
-        value = float(rsi_match.group(1))
-        if value < 30:
-            score += 40
-            signals.append("RSI < 30")
-        elif value > 70:
-            score += 20
-            signals.append("RSI > 70")
+def handle_trade(text, chat_id):
+    match = re.match(r'/trade (long|short) (\d+) SL=(\d+) TP=(\d+)', text, re.I)
+    if not match:
+        return send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade long 42500 SL=42250 TP=43200")
+    direction, entry, sl, tp = match.groups()
+    active_trades.append({"type": direction.lower(), "entry": float(entry), "sl": float(sl), "tp": float(tp), "tag": "manual"})
+    return send_message(chat_id, f"✅ {direction.upper()} Trade @ {entry} gespeichert.")
 
-    if "momentum: bullish" in text_lower:
-        score += 30
-        signals.append("Momentum Bullish")
-    if "momentum: bearish" in text_lower:
-        score += 30
-        signals.append("Momentum Bearish")
-    if "mss bullish break" in text_lower:
-        score += 20
-        signals.append("MSS Bullish Break")
-    if "mss bearish break" in text_lower:
-        score += 20
-        signals.append("MSS Bearish Break")
+def handle_batch(text, chat_id):
+    return send_message(chat_id, "⚙️ Batch-Funktion in Bearbeitung.")
 
-    if score > 0:
-        return (" + ".join(signals), score)
-    return (None, 0)
+def handle_open_price(text, chat_id):
+    global open_price
+    match = re.match(r'/openprice (\d+(\.\d+)?)', text)
+    if not match:
+        return send_message(chat_id, "❌ Beispiel: /openprice 44100")
+    open_price = float(match.group(1))
+    return send_message(chat_id, f"📍 Opening Price gesetzt: {open_price}")
 
-def generate_trade_suggestion(reason, score):
-    direction = "LONG" if "bullish" in reason.lower() or "rsi < 30" in reason.lower() else "SHORT"
-    price = get_live_price()
-    if not price:
-        price = "(aktuell)"
-    sl = round(40 + (100 - score) * 0.5)
-    tp = round(100 + score)
-    return f"🚀 Tradevorschlag (Score {score})\nTyp: {direction}\nEntry: {price}\nTrigger: {reason}\nSL: {sl} Punkte\nTP: {tp} Punkte\nTag: signal-auto\nNutze /trade um manuell zu speichern."
+def format_status():
+    if not active_trades:
+        return "ℹ️ Keine aktiven Positionen."
+    msg = "📈 Aktive Positionen:\n"
+    for t in active_trades:
+        msg += f"{t['type'].capitalize()} @ {t['entry']} TP: {t['tp']} SL: {t['sl']}\n"
+    return msg
 
-# Füge hier alle vorherigen Funktionen (handle_trade, handle_batch, format_status, etc.) unverändert hinzu
+def handle_close(text, chat_id):
+    if text.strip().lower() == "/close all":
+        active_trades.clear()
+        return send_message(chat_id, "✅ Alle Positionen wurden gelöscht.")
+    match = re.match(r'/close (\d+)', text)
+    if not match:
+        return send_message(chat_id, "❌ Beispiel: /close 42500")
+    price = float(match.group(1))
+    active_trades[:] = [t for t in active_trades if t["entry"] != price]
+    return send_message(chat_id, f"✅ Position bei {price} gelöscht.")
+
+def format_zones():
+    return f"📊 STDV-Zonen: [Platzhalter, Open Price: {open_price}]"
+
+def format_signals():
+    if not signal_memory:
+        return "📡 Keine aktiven Signale."
+    return "📡 Signale:\n" + "\n".join(signal_memory)
 
 if __name__ == "__main__":
-    try:
-        port = int(os.environ.get("PORT", 5000))
-        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-    except Exception as e:
-        print(f"❌ Fehler beim Starten des Servers: {e}", file=sys.stderr)
-        sys.exit(1)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
