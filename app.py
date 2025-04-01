@@ -8,7 +8,7 @@ import requests
 
 app = Flask(__name__)
 
-VERSION = "v5.5.3"
+VERSION = "v5.5.4"
 
 active_trades = []
 signal_memory = []
@@ -73,19 +73,9 @@ def telegram():
 
     return send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # Sicher per Render ENV setzen
-
 def send_message(chat_id, text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    try:
-        res = requests.post(url, json=payload)
-        print(f"SEND TO {chat_id}: {text}")
-        return "ok"
-    except Exception as e:
-        print(f"❌ Fehler beim Senden: {e}")
-        return "error"
-
+    print(f"SEND TO {chat_id}: {text}")
+    return "ok"
 
 def get_help():
     return f"📘 Befehle ({VERSION}):\n/status – offene Positionen\n/trade – Setup senden\n/close [Preis] – Trade schließen\n/close all – Alle Trades löschen\n/update – STDV aktualisieren\n/openprice [Preis] – STDV Startpreis setzen\n/zones – STDV Zonen anzeigen\n/signals – aktuelle Signale\n/resetsignals – Signal-Reset\n/batch – mehrere Trades\n/stats – Lernstatistik"
@@ -136,6 +126,33 @@ def handle_trade(text, chat_id):
         return send_message(chat_id, f"✅ {direction.upper()} @ {entry} gespeichert.")
     except Exception as e:
         return send_message(chat_id, f"❌ Fehler: {str(e)}")
+
+def handle_batch(text, chat_id):
+    try:
+        lines = text.strip().split("\n")[1:]
+        count = 0
+
+        for line in lines:
+            match = re.match(r"(LONG|SHORT)\s*\|\s*([\d\.]+)\s+lot\s+@\s+([\d\.]+)(?:\s*\|\s*TP:\s*([\w\.]+))?(?:\s*\|\s*SL:\s*([\w\.]+))?(?:\s*\|\s*Tag:\s*(\w+))?", line.strip(), re.IGNORECASE)
+            if match:
+                direction, lot, entry, tp, sl, tag = match.groups()
+                trade = {
+                    "type": direction.lower(),
+                    "lot": float(lot),
+                    "entry": float(entry),
+                    "tp": tp if tp else "open",
+                    "sl": sl if sl else "manual",
+                    "tag": tag if tag else "batch"
+                }
+                active_trades.append(trade)
+                count += 1
+
+        if count == 0:
+            return send_message(chat_id, "⚠️ Kein gültiger Batch erkannt.")
+
+        return send_message(chat_id, f"✅ {count} Trades gespeichert.")
+    except Exception as e:
+        return send_message(chat_id, f"❌ Fehler im Batch: {str(e)}")
 
 def format_signals():
     if not signal_memory:
@@ -235,31 +252,3 @@ def handle_close(text, chat_id):
             return send_message(chat_id, f"❎ {trade['type'].upper()} @ {price} geschlossen." + (f" PnL: {result}" if result else ""))
 
     return send_message(chat_id, "⚠️ Keine passende Position gefunden.")
-
-def handle_batch(text, chat_id):
-    try:
-        lines = text.strip().split("\n")[1:]  # Erste Zeile ist "/batch"
-        count = 0
-
-        for line in lines:
-            match = re.match(r"(LONG|SHORT)\s*\|\s*([\d\.]+)\s+lot\s+@\s+([\d\.]+)\s*\|\s*TP:\s*([\w\.]+)\s*\|\s*SL:\s*([\w\.]+)\s*\|\s*Tag:\s*(\w+)", line.strip(), re.IGNORECASE)
-            if match:
-                direction, lot, entry, tp, sl, tag = match.groups()
-                trade = {
-                    "type": direction.lower(),
-                    "lot": float(lot),
-                    "entry": float(entry),
-                    "tp": tp,
-                    "sl": sl,
-                    "tag": tag
-                }
-                active_trades.append(trade)
-                count += 1
-
-        if count == 0:
-            return send_message(chat_id, "⚠️ Kein gültiger Batch erkannt.")
-
-        return send_message(chat_id, f"✅ {count} Trades gespeichert.")
-    except Exception as e:
-        return send_message(chat_id, f"❌ Fehler im Batch: {str(e)}")
-
