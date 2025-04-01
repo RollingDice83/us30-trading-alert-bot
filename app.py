@@ -103,12 +103,10 @@ def format_stats():
         if r["pnl"] > 0:
             stats[tag]["wins"] += 1
 
-    msg = "📈 Signal-Auswertung:
-"
+    msg = "📈 Signal-Auswertung:\n""
     for tag, val in stats.items():
         winrate = round(100 * val["wins"] / val["total"], 1)
-        msg += f"• {tag.upper()}: {val['total']} Trades → {val['wins']}x Gewinn → {winrate}%
-"
+        msg += f"• {tag.upper()}: {val['total']} Trades → {val['wins']}x Gewinn → {winrate}%\n""
     return msg
 
 @app.route("/stats", methods=["POST"])
