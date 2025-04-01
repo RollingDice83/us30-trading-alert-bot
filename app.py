@@ -235,3 +235,31 @@ def handle_close(text, chat_id):
             return send_message(chat_id, f"❎ {trade['type'].upper()} @ {price} geschlossen." + (f" PnL: {result}" if result else ""))
 
     return send_message(chat_id, "⚠️ Keine passende Position gefunden.")
+
+def handle_batch(text, chat_id):
+    try:
+        lines = text.strip().split("\n")[1:]  # Erste Zeile ist "/batch"
+        count = 0
+
+        for line in lines:
+            match = re.match(r"(LONG|SHORT)\s*\|\s*([\d\.]+)\s+lot\s+@\s+([\d\.]+)\s*\|\s*TP:\s*([\w\.]+)\s*\|\s*SL:\s*([\w\.]+)\s*\|\s*Tag:\s*(\w+)", line.strip(), re.IGNORECASE)
+            if match:
+                direction, lot, entry, tp, sl, tag = match.groups()
+                trade = {
+                    "type": direction.lower(),
+                    "lot": float(lot),
+                    "entry": float(entry),
+                    "tp": tp,
+                    "sl": sl,
+                    "tag": tag
+                }
+                active_trades.append(trade)
+                count += 1
+
+        if count == 0:
+            return send_message(chat_id, "⚠️ Kein gültiger Batch erkannt.")
+
+        return send_message(chat_id, f"✅ {count} Trades gespeichert.")
+    except Exception as e:
+        return send_message(chat_id, f"❌ Fehler im Batch: {str(e)}")
+
