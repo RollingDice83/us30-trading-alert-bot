@@ -8,7 +8,7 @@ import requests
 
 app = Flask(__name__)
 
-VERSION = "v4.8"
+VERSION = "v5.5"
 
 active_trades = []
 signal_memory = []
