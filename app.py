@@ -38,40 +38,47 @@ def telegram():
     message = data["message"]
     chat_id = message["chat"]["id"]
     text = message.get("text", "").strip()
+    lowered = text.lower()
 
-    if text.lower().startswith("/help"):
+    print(f"[DEBUG] Eingehender Text: '{text}'")
+
+    # Command Parsing
+    if lowered.startswith("/help"):
         return send_message(chat_id, get_help())
-    elif text.lower().startswith("/status"):
+    elif lowered.startswith("/status"):
         return send_message(chat_id, format_status())
-    elif text.lower().startswith("/trade"):
+    elif lowered.startswith("/trade"):
         return handle_trade(text, chat_id)
-    elif text.lower().startswith("/batch"):
+    elif lowered.startswith("/batch"):
         return handle_batch(text, chat_id)
-    elif text.lower().startswith("/openprice"):
+    elif lowered.startswith("/openprice"):
         return handle_open_price(text, chat_id)
-    elif text.lower().startswith("/resetsignals"):
+    elif lowered.startswith("/resetsignals"):
         signal_memory.clear()
         return send_message(chat_id, "♻️ Signal-Speicher geleert.")
-    elif text.lower().startswith("/signals"):
+    elif lowered.startswith("/signals"):
         return send_message(chat_id, format_signals())
-    elif text.lower().startswith("/zones"):
+    elif lowered.startswith("/zones"):
         return send_message(chat_id, format_zones())
-    elif text.lower().startswith("/close"):
+    elif lowered.startswith("/close"):
         return handle_close(text, chat_id)
-    elif text.lower().startswith("/update"):
+    elif lowered.startswith("/update"):
         return send_message(chat_id, f"🔄 Update erhalten ({VERSION}) – alle Systeme aktiv.")
-    elif text.lower().startswith("/stats"):
+    elif lowered.startswith("/stats"):
         return send_message(chat_id, format_stats())
 
+    # Signal/Pattern Parsing
     parsed, score, tag = parse_signal(text)
     if parsed:
-        signal_memory.append(f"{parsed} [{time.strftime('%H:%M:%S')}] (Score {score}) | Tag: {tag}")
+        timestamp = time.strftime('%H:%M:%S')
+        signal_memory.append(f"{parsed} [{timestamp}] (Score {score}) | Tag: {tag}")
         if score >= 60:
             return send_message(chat_id, generate_trade_suggestion(parsed, score))
         else:
             return send_message(chat_id, f"✅ Signal erkannt: {parsed} (Score {score})")
 
     return send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
+
 
 def send_message(chat_id, text):
     print(f"SEND TO {chat_id}: {text}")
