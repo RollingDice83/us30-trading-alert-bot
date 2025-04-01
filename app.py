@@ -107,7 +107,7 @@ def format_stats():
     for tag, val in stats.items():
         winrate = round(100 * val["wins"] / val["total"], 1)
         lines.append(f"• {tag.upper()}: {val['total']} Trades → {val['wins']}x Gewinn → {winrate}%")
-    return "
+        return "
 ".join(lines)
 
 @app.route("/stats", methods=["POST"])
