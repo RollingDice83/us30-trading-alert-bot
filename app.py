@@ -91,6 +91,22 @@ def get_help():
 /batch – mehrere Trades"""
 
 def parse_signal(text):
+    # Erweiterung zur Webhook-Verarbeitung von exakten Signaltexten
+    signal_map = {
+        "rsi crossing up 30.00": ("RSI Cross Up 30", 40, "rsi"),
+        "rsi below 30": ("RSI < 30", 40, "rsi"),
+        "rsi above 70": ("RSI > 70", 20, "rsi"),
+        "rsi crossing down 70.00": ("RSI Cross Down 70", 20, "rsi"),
+        "momentum: bullish": ("Momentum Bullish", 30, "momentum"),
+        "momentum: bearish": ("Momentum Bearish", 30, "momentum"),
+        "mss bullish break": ("MSS Bullish Break", 20, "mss"),
+        "mss bearish break": ("MSS Bearish Break", 20, "mss")
+    }
+
+    text_lower = text.lower().strip()
+    for keyword, (label, score, tag) in signal_map.items():
+        if keyword in text_lower:
+            return (label, score, tag)
     text_lower = text.lower()
     score = 0
     signals = []
