@@ -8,7 +8,7 @@ import requests
 
 app = Flask(__name__)
 
-VERSION = "v5.5.2"
+VERSION = "v5.5.3"
 
 active_trades = []
 signal_memory = []
@@ -74,21 +74,8 @@ def telegram():
     return send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
 
 def send_message(chat_id, text):
-    token = os.environ.get("TELEGRAM_TOKEN")  # stelle sicher, dass deine TELEGRAM_TOKEN Umgebungsvariable gesetzt ist
-    if not token:
-        print(f"SEND TO {chat_id}: {text}")
-        return "ok"
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
-    response = requests.post(url, json=payload)
     print(f"SEND TO {chat_id}: {text}")
-    return response.text
-
+    return "ok"
 
 def get_help():
     return f"📘 Befehle ({VERSION}):\n/status – offene Positionen\n/trade – Setup senden\n/close [Preis] – Trade schließen\n/close all – Alle Trades löschen\n/update – STDV aktualisieren\n/openprice [Preis] – STDV Startpreis setzen\n/zones – STDV Zonen anzeigen\n/signals – aktuelle Signale\n/resetsignals – Signal-Reset\n/batch – mehrere Trades\n/stats – Lernstatistik"
@@ -114,17 +101,25 @@ def format_status():
 
 def handle_trade(text, chat_id):
     try:
-        pattern = r"/trade\s+(long|short)\s+(\d+(?:\.\d+)?)\s+SL=(\d+(?:\.\d+)?)\s+TP=(\d+(?:\.\d+)?)"
-        match = re.search(pattern, text.lower())
-        if not match:
-            return send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade long 42500 SL=42250 TP=43200")
+        pattern_full = r"/trade\s+(long|short)\s+(\d+(?:\.\d+)?)\s+SL=(\d+(?:\.\d+)?)\s+TP=(\d+(?:\.\d+)?)"
+        pattern_simple = r"/trade\s+(long|short)\s+(\d+(?:\.\d+)?)"
 
-        direction, entry, sl, tp = match.groups()
+        match = re.search(pattern_full, text.lower())
+        if match:
+            direction, entry, sl, tp = match.groups()
+        else:
+            match = re.search(pattern_simple, text.lower())
+            if not match:
+                return send_message(chat_id, "❌ Ungültiges Format. Beispiel: /trade long 42500 oder /trade long 42500 SL=42250 TP=43200")
+            direction, entry = match.groups()
+            sl = "manual"
+            tp = "open"
+
         active_trades.append({
             "type": direction,
             "entry": float(entry),
-            "sl": float(sl),
-            "tp": float(tp),
+            "sl": sl,
+            "tp": tp,
             "lot": 1.0,
             "tag": "manual"
         })
@@ -132,36 +127,53 @@ def handle_trade(text, chat_id):
     except Exception as e:
         return send_message(chat_id, f"❌ Fehler: {str(e)}")
 
-def handle_batch(text, chat_id):
-    lines = text.strip().split("\n")
-    count = 0
-    for line in lines:
-        if "lot @" in line and "TP:" in line:
-            try:
-                type_match = re.search(r"(LONG|SHORT)", line)
-                lot_match = re.search(r"(\d+(\.\d+)?) lot", line)
-                entry_match = re.search(r"@ (\d+(\.\d+)?)", line)
-                tp_match = re.search(r"TP: (\d+(\.\d+)?|open)", line)
-                sl_match = re.search(r"SL: (\d+(\.\d+)?|manual|none)", line)
-                tag_match = re.search(r"Tag: (\w+)", line)
+def format_signals():
+    if not signal_memory:
+        return "ℹ️ Keine aktiven Signale."
+    return "📡 Aktive Signale:\n" + "\n".join(signal_memory)
 
-                trade = {
-                    "type": type_match.group(1).lower(),
-                    "lot": float(lot_match.group(1)),
-                    "entry": float(entry_match.group(1)),
-                    "tp": tp_match.group(1) if tp_match else "open",
-                    "sl": sl_match.group(1) if sl_match else "manual",
-                    "tag": tag_match.group(1) if tag_match else "none"
-                }
-                active_trades.append(trade)
-                count += 1
-            except:
-                continue
+def parse_signal(text):
+    text = text.lower()
+    if "rsi" in text:
+        match = re.search(r"rsi.*?(\d+\.?\d*)", text)
+        if match:
+            value = float(match.group(1))
+            score = max(0, min(100, 100 - abs(50 - value) * 2))
+            tag = "RSI"
+            return f"RSI {value}", score, tag
+    if "rsi crossing up 30" in text:
+        return "RSI Crossing Up 30", 80, "RSI"
+    if "rsi crossing down 70" in text:
+        return "RSI Crossing Down 70", 80, "RSI"
+    if "rsi below 30" in text:
+        return "RSI Below 30", 75, "RSI"
+    if "rsi above 70" in text:
+        return "RSI Above 70", 75, "RSI"
+    if "momentum" in text:
+        if "bullish" in text:
+            return "Momentum Shift Bullish", 70, "Momentum"
+        elif "bearish" in text:
+            return "Momentum Shift Bearish", 70, "Momentum"
+    if "mss" in text:
+        if "bullish" in text:
+            return "MSS Break Bullish", 65, "MSS"
+        elif "bearish" in text:
+            return "MSS Break Bearish", 65, "MSS"
+    if re.fullmatch(r"\d{5,6}", text):
+        return f"Grid Signal: {text}", 10, "Grid"
+    return None, 0, "None"
 
-    if count == 0:
-        return send_message(chat_id, "⚠️ Keine gültigen Trades erkannt.")
-    else:
-        return send_message(chat_id, f"✅ {count} Trades gespeichert.")
+def generate_trade_suggestion(signal, score):
+    price = get_live_price()
+    if not price:
+        return f"📈 Signal-Auswertung:\n• {signal}\n• Score: {score}\n• Entry: N/A\n➡️ Kein Preis verfügbar."
+    return f"📈 Signal-Auswertung:\n• {signal}\n• Score: {score}\n• Entry: {price}\n✅ Vorschlag: /trade long {price} SL={round(price - 100)} TP={round(price + 300)}"
+
+def format_stats():
+    if not learned_results:
+        return "📊 Noch keine abgeschlossenen Trades."
+    avg = round(sum(learned_results) / len(learned_results), 2)
+    return f"📊 Gelernt aus {len(learned_results)} Trades.\nØ PnL: {avg} Punkte"
 
 def handle_open_price(text, chat_id):
     global open_price
@@ -213,43 +225,3 @@ def handle_close(text, chat_id):
             return send_message(chat_id, f"❎ {trade['type'].upper()} @ {price} geschlossen." + (f" PnL: {result}" if result else ""))
 
     return send_message(chat_id, "⚠️ Keine passende Position gefunden.")
-
-def format_signals():
-    if not signal_memory:
-        return "ℹ️ Keine aktiven Signale."
-    return "📡 Aktive Signale:\n" + "\n".join(signal_memory)
-
-def parse_signal(text):
-    text = text.lower()
-    if "rsi" in text:
-        match = re.search(r"rsi.*?(\d+\.?\d*)", text)
-        if match:
-            value = float(match.group(1))
-            score = max(0, min(100, 100 - abs(50 - value) * 2))
-            tag = "RSI"
-            return f"RSI {value}", score, tag
-    elif "momentum" in text:
-        if "bullish" in text:
-            return "Momentum Shift Bullish", 70, "Momentum"
-        elif "bearish" in text:
-            return "Momentum Shift Bearish", 70, "Momentum"
-    elif "mss" in text:
-        if "bullish" in text:
-            return "MSS Break Bullish", 65, "MSS"
-        elif "bearish" in text:
-            return "MSS Break Bearish", 65, "MSS"
-    elif re.fullmatch(r"\d{5,6}", text):
-        return f"Grid Signal: {text}", 10, "Grid"
-    return None, 0, "None"
-
-def generate_trade_suggestion(signal, score):
-    price = get_live_price()
-    if not price:
-        return f"📈 Signal-Auswertung:\n• {signal}\n• Score: {score}\n• Entry: N/A\n➡️ Kein Preis verfügbar."
-    return f"📈 Signal-Auswertung:\n• {signal}\n• Score: {score}\n• Entry: {price}\n✅ Vorschlag: /trade long {price} SL={round(price - 100)} TP={round(price + 300)}"
-
-def format_stats():
-    if not learned_results:
-        return "📊 Noch keine abgeschlossenen Trades."
-    avg = round(sum(learned_results) / len(learned_results), 2)
-    return f"📊 Gelernt aus {len(learned_results)} Trades.\nØ PnL: {avg} Punkte"
