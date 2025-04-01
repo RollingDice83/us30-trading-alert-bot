@@ -83,6 +83,47 @@ def get_help():
 /close [Preis] – Trade schließen
 /close [long|short] [Entry] at [Exit] – Position bewerten
 /close all – alle Trades löschen
+/stats – Auswertung aller Trades nach Signal-Tag
+/update – Check & Statusmeldung
+/openprice [Preis] – STDV Startpreis setzen
+/zones – STDV Zonen anzeigen
+/signals – aktuelle Signale
+/resetsignals – Signal-Reset
+/batch – mehrere Trades"""
+
+def format_stats():
+    if not learned_results:
+        return "📊 Keine abgeschlossenen Trades gespeichert."
+    stats = {}
+    for r in learned_results:
+        tag = r.get("tag", r["type"])
+        if tag not in stats:
+            stats[tag] = {"total": 0, "wins": 0}
+        stats[tag]["total"] += 1
+        if r["pnl"] > 0:
+            stats[tag]["wins"] += 1
+
+    msg = "📈 Signal-Auswertung:
+"
+    for tag, val in stats.items():
+        winrate = round(100 * val["wins"] / val["total"], 1)
+        msg += f"• {tag.upper()}: {val['total']} Trades → {val['wins']}x Gewinn → {winrate}%
+"
+    return msg
+
+@app.route("/stats", methods=["POST"])
+def stats():
+    data = request.json
+    if not data or "message" not in data:
+        return jsonify(ok=True)
+    chat_id = data["message"]["chat"]["id"]
+    return send_message(chat_id, format_stats())
+    return f"""📘 Befehle ({VERSION}):
+/status – offene Positionen
+/trade – Setup senden
+/close [Preis] – Trade schließen
+/close [long|short] [Entry] at [Exit] – Position bewerten
+/close all – alle Trades löschen
 /update – Check & Statusmeldung
 /openprice [Preis] – STDV Startpreis setzen
 /zones – STDV Zonen anzeigen
