@@ -73,9 +73,19 @@ def telegram():
 
     return send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
 
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # Sicher per Render ENV setzen
+
 def send_message(chat_id, text):
-    print(f"SEND TO {chat_id}: {text}")
-    return "ok"
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    try:
+        res = requests.post(url, json=payload)
+        print(f"SEND TO {chat_id}: {text}")
+        return "ok"
+    except Exception as e:
+        print(f"❌ Fehler beim Senden: {e}")
+        return "error"
+
 
 def get_help():
     return f"📘 Befehle ({VERSION}):\n/status – offene Positionen\n/trade – Setup senden\n/close [Preis] – Trade schließen\n/close all – Alle Trades löschen\n/update – STDV aktualisieren\n/openprice [Preis] – STDV Startpreis setzen\n/zones – STDV Zonen anzeigen\n/signals – aktuelle Signale\n/resetsignals – Signal-Reset\n/batch – mehrere Trades\n/stats – Lernstatistik"
