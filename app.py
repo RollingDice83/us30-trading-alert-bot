@@ -8,12 +8,16 @@ import requests
 
 app = Flask(__name__)
 
-VERSION = "v5.5.4"
+VERSION = "v5.6"
 
 active_trades = []
 signal_memory = []
 open_price = None
 learned_results = []
+
+# === Autonomous Entry Engine Core ===
+last_trade_time = 0
+min_delay_between_trades = 60  # seconds (temporary value for testing)
 
 def get_live_price():
     try:
@@ -65,9 +69,19 @@ def telegram():
 
     parsed, score, tag = parse_signal(text)
     if parsed:
-        signal_memory.append(f"{parsed} [{time.strftime('%H:%M:%S')}] (Score {score}) | Tag: {tag}")
-        if score >= 60:
-            return send_message(chat_id, generate_trade_suggestion(parsed, score))
+        timestamp = time.strftime('%H:%M:%S')
+        signal_memory.append(f"{parsed} [{timestamp}] (Score {score}) | Tag: {tag}")
+
+        if score >= 80:
+            suggestion = generate_trade_suggestion(parsed, score)
+            global last_trade_time
+            now = time.time()
+            if now - last_trade_time >= min_delay_between_trades:
+                last_trade_time = now
+                execute_autotrade(suggestion)
+                return send_message(chat_id, suggestion + "\n🚀 Autotrade aktiviert.")
+            else:
+                return send_message(chat_id, suggestion + "\n⏳ Trade-Vorschlag gespeichert. Delay aktiv.")
         else:
             return send_message(chat_id, f"✅ Signal erkannt: {parsed} (Score {score})")
 
@@ -85,6 +99,20 @@ def send_message(chat_id, text):
         print(f"❌ Telegram Fehler: {e}")
         return jsonify(ok=False)
 
+def execute_autotrade(suggestion):
+    match = re.search(r"Entry: (\d+\.?\d*)", suggestion)
+    if match:
+        entry = float(match.group(1))
+        sl = round(entry - 100)
+        tp = round(entry + 300)
+        active_trades.append({
+            "type": "long",
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "lot": 1.0,
+            "tag": "auto"
+        })
 
 def get_help():
     return f"📘 Befehle ({VERSION}):\n/status – offene Positionen\n/trade – Setup senden\n/close [Preis] – Trade schließen\n/close all – Alle Trades löschen\n/update – STDV aktualisieren\n/openprice [Preis] – STDV Startpreis setzen\n/zones – STDV Zonen anzeigen\n/signals – aktuelle Signale\n/resetsignals – Signal-Reset\n/batch – mehrere Trades\n/stats – Lernstatistik"
