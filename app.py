@@ -85,9 +85,11 @@ def telegram():
     return send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
 
 # --- Helper Functions ---
+from flask import make_response
+
 def send_message(chat_id, text):
     print(f"SEND TO {chat_id}: {text}")
-    return "ok"
+    return make_response("ok", 200)
 
 def get_help():
     return f"📘 Befehle (v{VERSION}):\n/status – offene Positionen\n/trade – Setup senden\n/close [Preis] – Trade schließen\n/close all – Alle Trades löschen\n/update – STDV aktualisieren\n/openprice [Preis] – STDV Startpreis setzen\n/zones – STDV Zonen anzeigen\n/signals – aktuelle Signale\n/resetsignals – Signal-Reset\n/batch – mehrere Trades\n/stats – Lernstatistik"
