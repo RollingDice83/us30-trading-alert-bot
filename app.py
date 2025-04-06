@@ -1,285 +1,236 @@
-import os
-import re
-import json
-import time
-from datetime import datetime, timedelta
+# US30 Telegram Trading Bot – Version v6.9 ✅
+
 from flask import Flask, request
-import requests
+import os
+import json
+import re
+from datetime import datetime
 
 app = Flask(__name__)
 
-# === Konfiguration ===
-VERSION = "v6.8"
+VERSION = "v6.9"
+
 TRADES = []
 SIGNALS = []
-SCORES = {}
-OPEN_PRICE = None
-SIGNAL_TIMESTAMPS = []
+OPEN_PRICE = 44000  # Default – kann per /openprice angepasst werden
+STDV_LEVELS = {}
 
-# === Telegram Setup ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# === STDV Zonen Berechnung ===
-def get_stdv_zones():
-    if not OPEN_PRICE:
-        return "⚠️ Kein Opening Price gesetzt. Nutze /openprice [Preis]"
-    base = float(OPEN_PRICE)
-    msg = "📊 STDV Zonen:\n"
-    for i in range(-5, 6):
-        val = base * (1 + (i / 100))
-        if i == 0:
-            msg += f"➡️  0% = {val:.2f}\n"
-        else:
-            msg += f"{i:+}% = {val:.2f}\n"
+# ------------------------- UTILITIES -------------------------
+
+def send_message(text):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return "Missing token or chat_id"
+    from urllib import request as urlrequest
+    import urllib.parse
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = urllib.parse.urlencode({
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML"
+    }).encode()
+    req = urlrequest.Request(url, data=data)
+    urlrequest.urlopen(req)
+
+# ------------------------- STDV ZONES -------------------------
+
+def update_stdv_zones():
+    global STDV_LEVELS
+    base = OPEN_PRICE
+    STDV_LEVELS = {
+        f"+{i}%": round(base * (1 + i / 100), 2) for i in range(1, 6)
+    }
+    STDV_LEVELS.update({
+        f"-{i}%": round(base * (1 - i / 100), 2) for i in range(1, 6)
+    })
+
+def format_zones():
+    msg = f"📊 <b>STDV Zonen (Basis: {OPEN_PRICE})</b>\n"
+    for key in sorted(STDV_LEVELS.keys(), key=lambda x: float(x.replace('%',''))):
+        msg += f"{key}: {STDV_LEVELS[key]}\n"
     return msg
 
-# === Signal speichern ===
-def save_signal(text, score):
-    timestamp = datetime.utcnow().isoformat()
-    SIGNALS.append({"text": text, "score": score, "timestamp": timestamp})
-    SIGNAL_TIMESTAMPS.append(datetime.utcnow())
+# ------------------------- SIGNAL ENGINE -------------------------
 
-# === Score Engine ===
-def score_signal(text):
+def parse_signal(text):
     score = 0
+    tag = ""
     text_lower = text.lower()
 
-    if "rsi below 30" in text_lower or "rsi 30" in text_lower:
+    if "rsi below 30" in text_lower:
         score += 60
+        tag = "RSI 30"
     elif "rsi crossing up 30" in text_lower:
         score += 60
-    elif "rsi crossing down 70" in text_lower or "rsi above 70" in text_lower:
-        score += 40
-
-    if "momentum: bullish" in text_lower:
+        tag = "RSI 30"
+    elif "momentum: bullish" in text_lower:
         score += 20
-    elif "momentum: bearish" in text_lower:
+        tag = "Momentum Bullish"
+    elif "mss bullish break" in text_lower:
+        score += 15
+        tag = "MSS Bullish"
+    elif re.match(r"^\d{5,6}$", text.strip()):  # Preis z. B. 44300
         score += 10
-
-    if "mss bullish" in text_lower:
-        score += 15
-    elif "mss bearish" in text_lower:
-        score += 15
-
-    if "vix crossing" in text_lower:
-        try:
-            vix_value = int(re.search(r"vix crossing (\d+)", text_lower).group(1))
-            if vix_value >= 40:
-                score += 40
-            elif vix_value >= 30:
-                score += 25
-            elif vix_value >= 20:
-                score += 15
-            elif vix_value < 20:
+        tag = f"Grid Signal: {text.strip()}"
+    elif "vix crossing" in text_lower:
+        num_match = re.search(r"vix crossing (\d+)", text_lower)
+        if num_match:
+            vix = int(num_match.group(1))
+            if vix >= 40:
+                score -= 10
+            elif vix <= 20:
                 score += 5
-        except:
-            pass
+            tag = f"VIX {vix}"
 
-    if re.match(r"^(\d{4,6})(\.\d+)?$", text.strip()):
-        score += 10  # Preislevel Grid Impuls
+    if score > 0:
+        SIGNALS.append({
+            "text": text,
+            "score": score,
+            "tag": tag,
+            "timestamp": datetime.now().isoformat()
+        })
+        return tag, score
+    return None, 0
 
-    # STDV Zonen Einfluss
-    if OPEN_PRICE:
-        try:
-            price = float(text.strip())
-            deviation = (price - float(OPEN_PRICE)) / float(OPEN_PRICE)
-            if abs(deviation) >= 0.03:
-                score += 10
-            elif abs(deviation) >= 0.05:
-                score += 15
-        except:
-            pass
+# ------------------------- COMMAND HANDLERS -------------------------
 
-    return min(score, 100)
+def handle_status():
+    if not TRADES:
+        return "📭 Keine offenen Positionen."
+    msg = "📈 <b>Offene Positionen</b>\n"
+    for t in TRADES:
+        msg += f"{t['type']} @ {t['entry']} – TP: {t['tp']} | SL: {t['sl']}\n"
+    return msg
 
-# === Signal Parsing ===
-def parse_signal(text):
-    score = score_signal(text)
-    save_signal(text, score)
-    return f"✅ Signal erkannt: {text} (Score {score})", score
+def handle_trade(text):
+    parts = text.split()
+    if len(parts) < 3:
+        return "❌ Format: /trade [long|short] [price]"
+    direction = parts[1].upper()
+    entry = float(parts[2])
+    tp = entry + 250 if direction == "LONG" else entry - 250
+    sl = entry - 150 if direction == "LONG" else entry + 150
+    TRADES.append({"type": direction, "entry": entry, "tp": tp, "sl": sl})
+    return f"✅ Trade gespeichert: {direction} @ {entry} (TP: {tp}, SL: {sl})"
 
-# === Hedge AI Part 1 ===
-def hedge_ai():
-    return "🤖 Hedge AI Modul geladen. Nächster Schritt: Exit/TP Bewertung."
+def handle_close(text):
+    if "all" in text.lower():
+        TRADES.clear()
+        return "✅ Alle Trades wurden gelöscht."
+    price_match = re.search(r"\d{4,6}", text)
+    if not price_match:
+        return "❌ Bitte gib den Entry-Preis an."
+    entry = float(price_match.group())
+    for t in TRADES:
+        if t['entry'] == entry:
+            TRADES.remove(t)
+            return f"✅ Trade @ {entry} gelöscht."
+    return "❌ Kein Trade mit diesem Preis gefunden."
 
-# === Signal-Dichte Analyse ===
-def analyze_density():
-    now = datetime.utcnow()
-    recent = [t for t in SIGNAL_TIMESTAMPS if now - t <= timedelta(minutes=15)]
-    count = len(recent)
-    if count >= 3:
-        return f"⚠️ Hohe Signal-Dichte: {count} Impulse in 15 Minuten."
-    return None
+def handle_signals():
+    if not SIGNALS:
+        return "ℹ️ Keine aktuellen Signale."
+    msg = "📡 <b>Letzte Signale</b>\n"
+    for s in SIGNALS[-5:]:
+        msg += f"✅ {s['tag']} (Score {s['score']})\n"
+    return msg
 
-# === Telegram Versand ===
-def send_message(chat_id, text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    try:
-        requests.post(url, json=payload)
-    except Exception as e:
-        print(f"Telegram-Fehler: {e}")
+def handle_help():
+    return f"📘 Befehle (v{VERSION}):\n/status – offene Positionen\n/trade – Setup senden\n/close [Preis] – Trade schließen\n/close all – Alle Trades löschen\n/update – STDV aktualisieren\n/openprice [Preis] – STDV Startpreis setzen\n/zones – STDV Zonen anzeigen\n/signals – aktuelle Signale\n/resetsignals – Signal-Reset\n/batch – mehrere Trades\n/stats – Lernstatistik"
 
-# === Telegram Handler ===
+def handle_open_price(text):
+    global OPEN_PRICE
+    price_match = re.search(r"\d{4,6}", text)
+    if not price_match:
+        return "❌ Ungültiger Preis."
+    OPEN_PRICE = int(price_match.group())
+    update_stdv_zones()
+    return format_zones()
+
+def handle_update():
+    update_stdv_zones()
+    return format_zones()
+
+def handle_resetsignals():
+    SIGNALS.clear()
+    return "✅ Signal-Speicher wurde geleert."
+
+def handle_batch(text):
+    lines = text.strip().split("\n")
+    added = 0
+    for l in lines[1:]:
+        match = re.match(r"(LONG|SHORT)\s*\|\s*(\d+(\.\d+)?) lot @ (\d+(\.\d+)?)", l.upper())
+        if match:
+            typ, lot, _, entry, _ = match.groups()
+            tp = float(entry) + 250 if typ == "LONG" else float(entry) - 250
+            sl = float(entry) - 150 if typ == "LONG" else float(entry) + 150
+            TRADES.append({"type": typ, "entry": float(entry), "tp": tp, "sl": sl})
+            added += 1
+    return f"✅ {added} Trades gespeichert."
+
+def handle_stats():
+    count = len(SIGNALS)
+    avg_score = round(sum(s['score'] for s in SIGNALS) / count, 2) if count else 0
+    return f"📊 Lernstatistik:\nSignale gespeichert: {count}\n⏱ Durchschnittlicher Score: {avg_score}"
+
+# ------------------------- MAIN ROUTES -------------------------
+
 @app.route("/telegram", methods=["POST"])
 def telegram():
     data = request.get_json()
-    text = data.get("message", {}).get("text", "")
-    chat_id = str(data.get("message", {}).get("chat", {}).get("id", ""))
-    if not text:
-        return "OK"
+    if not data or "message" not in data:
+        return "ok"
 
-    global OPEN_PRICE
-    response_sent = False
+    text = data['message'].get('text', '').strip()
+    chat_id = data['message']['chat']['id']
 
-    if text.startswith("/help"):
-        msg = f"📘 Befehle ({VERSION}):\n"
-        msg += "/status – offene Positionen\n"
-        msg += "/trade [long/short] [Preis] – Setup senden\n"
-        msg += "/close [Preis] – Trade schließen\n"
-        msg += "/close all – Alle Trades löschen\n"
-        msg += "/update – STDV aktualisieren\n"
-        msg += "/openprice [Preis] – STDV Startpreis setzen\n"
-        msg += "/zones – STDV Zonen anzeigen\n"
-        msg += "/signals – aktuelle Signale\n"
-        msg += "/resetsignals – Signal-Reset\n"
-        msg += "/batch – mehrere Trades\n"
-        msg += "/stats – Lernstatistik\n"
-        msg += "/hedgecheck – Hedge Status anzeigen\n"
-        send_message(chat_id, msg)
-        response_sent = True
-
-    elif text.startswith("/zones") or text.startswith("/update"):
-        msg = get_stdv_zones()
-        send_message(chat_id, msg)
-        response_sent = True
-
-    elif text.startswith("/openprice"):
-        parts = text.split()
-        if len(parts) >= 2:
-            try:
-                OPEN_PRICE = float(parts[1])
-                send_message(chat_id, f"✅ Opening Price gesetzt auf {OPEN_PRICE:.2f}")
-            except:
-                send_message(chat_id, "⚠️ Ungültiger Preis.")
-        else:
-            send_message(chat_id, "⚠️ Nutzung: /openprice [Preis]")
-        response_sent = True
-
-    elif text.startswith("/signals"):
-        if not SIGNALS:
-            send_message(chat_id, "📭 Keine Signale im Speicher.")
-        else:
-            msg = "🧠 Aktive Signale:\n"
-            for s in SIGNALS[-5:]:
-                msg += f"• {s['text']} (Score {s['score']})\n"
-            send_message(chat_id, msg)
-        response_sent = True
-
-    elif text.startswith("/resetsignals"):
-        SIGNALS.clear()
-        SIGNAL_TIMESTAMPS.clear()
-        send_message(chat_id, "🧹 Signal-Speicher gelöscht.")
-        response_sent = True
-
-    elif text.startswith("/hedgecheck"):
-        recent_short_signals = [
-            s for s in SIGNALS if "short" in s["text"].lower() or s["score"] >= 60
-        ]
-        count = len(recent_short_signals)
-        if count >= 3:
-            advice = "Hedge aktiv lassen und TP prüfen."
-            level = "Hoch"
-        elif count == 2:
-            advice = "Hedge überwachen – mögliches TP-Fenster."
-            level = "Mittel"
-        else:
-            advice = "TP in Sicht oder Hedge ggf. reduzieren."
-            level = "Niedrig"
-        msg = f"🛡️ Hedge-Status-Check:\n• Short-Signale erkannt: {count}\n• Risiko-Level: {level}\n• Empfehlung: {advice}"
-        send_message(chat_id, msg)
-        response_sent = True
-
+    if text.startswith("/status"):
+        msg = handle_status()
     elif text.startswith("/trade"):
-        parts = text.split()
-        if len(parts) >= 3:
-            direction = parts[1].upper()
-            entry = float(parts[2])
-            TRADES.append({"type": direction, "entry": entry})
-            send_message(chat_id, f"💼 Trade gespeichert: {direction} @ {entry}")
-        else:
-            send_message(chat_id, "⚠️ Nutzung: /trade [long/short] [Preis]")
-        response_sent = True
-
-    elif text.startswith("/status"):
-        if not TRADES:
-            send_message(chat_id, "📭 Keine offenen Positionen.")
-        else:
-            msg = "📈 Offene Positionen:\n"
-            for t in TRADES:
-                msg += f"• {t['type']} @ {t['entry']}\n"
-            send_message(chat_id, msg)
-        response_sent = True
-
-    elif text.startswith("/close all"):
-        TRADES.clear()
-        send_message(chat_id, "❌ Alle Trades gelöscht.")
-        response_sent = True
-
+        msg = handle_trade(text)
     elif text.startswith("/close"):
-        try:
-            close_price = float(text.split()[1])
-            remaining = []
-            closed = 0
-            for t in TRADES:
-                if abs(t['entry'] - close_price) < 10:
-                    closed += 1
-                else:
-                    remaining.append(t)
-            TRADES.clear()
-            TRADES.extend(remaining)
-            send_message(chat_id, f"✅ {closed} Trades bei {close_price} geschlossen.")
-        except:
-            send_message(chat_id, "⚠️ Nutzung: /close [Preis]")
-        response_sent = True
-
+        msg = handle_close(text)
+    elif text.startswith("/signals"):
+        msg = handle_signals()
+    elif text.startswith("/help"):
+        msg = handle_help()
+    elif text.startswith("/zones"):
+        msg = format_zones()
+    elif text.startswith("/openprice"):
+        msg = handle_open_price(text)
+    elif text.startswith("/update"):
+        msg = handle_update()
+    elif text.startswith("/resetsignals"):
+        msg = handle_resetsignals()
+    elif text.startswith("/batch"):
+        msg = handle_batch(text)
     elif text.startswith("/stats"):
-        msg = f"📊 Stats:\nSignale: {len(SIGNALS)}\nLetzter Score: {SIGNALS[-1]['score'] if SIGNALS else '–'}\n"
-        msg += hedge_ai()
-        send_message(chat_id, msg)
-        response_sent = True
+        msg = handle_stats()
+    else:
+        tag, score = parse_signal(text)
+        msg = f"✅ Signal erkannt: {tag} (Score {score})" if score > 0 else "❌ Unbekannter Befehl. Nutze /help für alle Kommandos."
 
-    elif re.match(r"^\d{4,6}(\.\d+)?$", text.strip()) or any(
-        keyword in text.lower() for keyword in ["rsi", "momentum", "mss", "vix"]
-    ):
-        msg, score = parse_signal(text.strip())
-        density_alert = analyze_density()
-        send_message(chat_id, msg)
-        if density_alert:
-            send_message(chat_id, density_alert)
-        response_sent = True
+    send_message(msg)
+    return "ok"
 
-    if not response_sent:
-        send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
-
-    return "OK"
-
-# === Webhook Endpoint für TradingView Signale ===
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    data = request.get_data(as_text=True)
-    try:
-        msg, score = parse_signal(data.strip())
-        print(f"WEBHOOK SIGNAL: {msg}")
-    except:
-        print("Webhook-Fehler beim Verarbeiten.")
-    return "OK"
-
-# === Root Check ===
 @app.route("/")
 def home():
-    return f"US30 Bot {VERSION} läuft."
+    return f"US30 Bot v{VERSION} läuft."
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    if not data:
+        return "no data"
+    text = data.get("text") or data.get("message")
+    if text:
+        tag, score = parse_signal(text)
+        if score > 0:
+            send_message(f"✅ Signal erkannt: {tag} (Score {score})")
+    return "ok"
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    update_stdv_zones()
+    app.run(debug=True)
