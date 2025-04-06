@@ -8,7 +8,7 @@ from flask import Flask, request
 app = Flask(__name__)
 
 # === Konfiguration ===
-VERSION = "v6.5"
+VERSION = "v6.5.1"
 TRADES = []
 SIGNALS = []
 SCORES = {}
@@ -26,10 +26,10 @@ def get_stdv_zones():
     base = float(OPEN_PRICE)
     msg = "📊 STDV Zonen:\n"
     for i in range(-5, 6):
+        val = base * (1 + (i / 100))
         if i == 0:
-            msg += f"➡️  0% = {base:.2f}\n"
+            msg += f"➡️  0% = {val:.2f}\n"
         else:
-            val = base * (1 + (i / 100))
             msg += f"{i:+}% = {val:.2f}\n"
     return msg
 
@@ -43,6 +43,7 @@ def save_signal(text, score):
 def score_signal(text):
     score = 0
     text_lower = text.lower()
+
     if "rsi below 30" in text_lower or "rsi 30" in text_lower:
         score += 60
     elif "rsi crossing up 30" in text_lower:
@@ -61,10 +62,18 @@ def score_signal(text):
         score += 15
 
     if "vix crossing" in text_lower:
-        if "38" in text_lower or "50" in text_lower:
-            score += 25
-        elif "24" in text_lower:
-            score += 10
+        try:
+            vix_value = int(re.search(r"vix crossing (\d+)", text_lower).group(1))
+            if vix_value >= 40:
+                score += 40
+            elif vix_value >= 30:
+                score += 25
+            elif vix_value >= 20:
+                score += 15
+            elif vix_value < 20:
+                score += 5
+        except:
+            pass
 
     if re.match(r"^(\d{4,6})(\.\d+)?$", text.strip()):
         score += 10  # Preislevel Grid Impuls
