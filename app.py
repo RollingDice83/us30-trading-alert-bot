@@ -100,8 +100,16 @@ def analyze_density():
     return None
 
 # === Telegram Versand ===
+import requests
+
 def send_message(chat_id, text):
-    print(f"SEND TO {chat_id}: {text}")
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    try:
+        requests.post(url, json=payload)
+    except Exception as e:
+        print(f"Telegram-Fehler: {e}")
+
 
 # === Telegram Handler ===
 @app.route("/telegram", methods=["POST"])
