@@ -8,7 +8,7 @@ from flask import Flask, request
 app = Flask(__name__)
 
 # === Konfiguration ===
-VERSION = "v6.5.1"
+VERSION = "v6.6"
 TRADES = []
 SIGNALS = []
 SCORES = {}
@@ -86,7 +86,7 @@ def parse_signal(text):
     save_signal(text, score)
     return f"✅ Signal erkannt: {text} (Score {score})", score
 
-# === Hedge AI Part 1 – Placeholder ===
+# === Hedge AI Part 1 ===
 def hedge_ai():
     return "🤖 Hedge AI Modul geladen. Nächster Schritt: Exit/TP Bewertung."
 
@@ -127,6 +127,7 @@ def telegram():
         msg += "/resetsignals – Signal-Reset\n"
         msg += "/batch – mehrere Trades\n"
         msg += "/stats – Lernstatistik\n"
+        msg += "/hedgecheck – Hedge Status anzeigen\n"
         send_message(chat_id, msg)
 
     elif text.startswith("/zones") or text.startswith("/update"):
@@ -157,6 +158,23 @@ def telegram():
         SIGNALS.clear()
         SIGNAL_TIMESTAMPS.clear()
         send_message(chat_id, "🧹 Signal-Speicher gelöscht.")
+
+    elif text.startswith("/hedgecheck"):
+        recent_short_signals = [
+            s for s in SIGNALS if "short" in s["text"].lower() or s["score"] >= 60
+        ]
+        count = len(recent_short_signals)
+        if count >= 3:
+            advice = "Hedge aktiv lassen und TP prüfen."
+            level = "Hoch"
+        elif count == 2:
+            advice = "Hedge überwachen – mögliches TP-Fenster."
+            level = "Mittel"
+        else:
+            advice = "TP in Sicht oder Hedge ggf. reduzieren."
+            level = "Niedrig"
+        msg = f"🛡️ Hedge-Status-Check:\n• Short-Signale erkannt: {count}\n• Risiko-Level: {level}\n• Empfehlung: {advice}"
+        send_message(chat_id, msg)
 
     elif re.match(r"^\d{4,6}(\.\d+)?$", text.strip()):
         msg, score = parse_signal(text.strip())
