@@ -9,7 +9,7 @@ import requests
 app = Flask(__name__)
 
 # === Konfiguration ===
-VERSION = "v6.7"
+VERSION = "v6.8"
 TRADES = []
 SIGNALS = []
 SCORES = {}
@@ -79,6 +79,18 @@ def score_signal(text):
     if re.match(r"^(\d{4,6})(\.\d+)?$", text.strip()):
         score += 10  # Preislevel Grid Impuls
 
+    # STDV Zonen Einfluss
+    if OPEN_PRICE:
+        try:
+            price = float(text.strip())
+            deviation = (price - float(OPEN_PRICE)) / float(OPEN_PRICE)
+            if abs(deviation) >= 0.03:
+                score += 10
+            elif abs(deviation) >= 0.05:
+                score += 15
+        except:
+            pass
+
     return min(score, 100)
 
 # === Signal Parsing ===
@@ -119,13 +131,12 @@ def telegram():
         return "OK"
 
     global OPEN_PRICE
-
     response_sent = False
 
     if text.startswith("/help"):
         msg = f"📘 Befehle ({VERSION}):\n"
         msg += "/status – offene Positionen\n"
-        msg += "/trade – Setup senden\n"
+        msg += "/trade [long/short] [Preis] – Setup senden\n"
         msg += "/close [Preis] – Trade schließen\n"
         msg += "/close all – Alle Trades löschen\n"
         msg += "/update – STDV aktualisieren\n"
@@ -190,6 +201,55 @@ def telegram():
         send_message(chat_id, msg)
         response_sent = True
 
+    elif text.startswith("/trade"):
+        parts = text.split()
+        if len(parts) >= 3:
+            direction = parts[1].upper()
+            entry = float(parts[2])
+            TRADES.append({"type": direction, "entry": entry})
+            send_message(chat_id, f"💼 Trade gespeichert: {direction} @ {entry}")
+        else:
+            send_message(chat_id, "⚠️ Nutzung: /trade [long/short] [Preis]")
+        response_sent = True
+
+    elif text.startswith("/status"):
+        if not TRADES:
+            send_message(chat_id, "📭 Keine offenen Positionen.")
+        else:
+            msg = "📈 Offene Positionen:\n"
+            for t in TRADES:
+                msg += f"• {t['type']} @ {t['entry']}\n"
+            send_message(chat_id, msg)
+        response_sent = True
+
+    elif text.startswith("/close all"):
+        TRADES.clear()
+        send_message(chat_id, "❌ Alle Trades gelöscht.")
+        response_sent = True
+
+    elif text.startswith("/close"):
+        try:
+            close_price = float(text.split()[1])
+            remaining = []
+            closed = 0
+            for t in TRADES:
+                if abs(t['entry'] - close_price) < 10:
+                    closed += 1
+                else:
+                    remaining.append(t)
+            TRADES.clear()
+            TRADES.extend(remaining)
+            send_message(chat_id, f"✅ {closed} Trades bei {close_price} geschlossen.")
+        except:
+            send_message(chat_id, "⚠️ Nutzung: /close [Preis]")
+        response_sent = True
+
+    elif text.startswith("/stats"):
+        msg = f"📊 Stats:\nSignale: {len(SIGNALS)}\nLetzter Score: {SIGNALS[-1]['score'] if SIGNALS else '–'}\n"
+        msg += hedge_ai()
+        send_message(chat_id, msg)
+        response_sent = True
+
     elif re.match(r"^\d{4,6}(\.\d+)?$", text.strip()) or any(
         keyword in text.lower() for keyword in ["rsi", "momentum", "mss", "vix"]
     ):
@@ -198,12 +258,6 @@ def telegram():
         send_message(chat_id, msg)
         if density_alert:
             send_message(chat_id, density_alert)
-        response_sent = True
-
-    elif text.startswith("/stats"):
-        msg = f"📊 Stats:\nSignale: {len(SIGNALS)}\nLetzter Score: {SIGNALS[-1]['score'] if SIGNALS else '–'}\n"
-        msg += hedge_ai()
-        send_message(chat_id, msg)
         response_sent = True
 
     if not response_sent:
