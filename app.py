@@ -3,7 +3,7 @@ import re, time, os, requests
 
 app = Flask(__name__)
 
-VERSION = "v5.8.1"
+VERSION = "v6.0"
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -74,12 +74,8 @@ def telegram():
         signal_memory.append(parsed)
         send_message(chat_id, f"✅ Signal erkannt: {parsed} (Score {score})")
         if score >= 80:
-            global last_autotrade_time
-            if time.time() - last_autotrade_time > AUTO_TRADE_DELAY:
-                trade = generate_trade_suggestion(parsed, score)
-                active_trades.append(trade)
-                last_autotrade_time = time.time()
-                send_message(chat_id, f"🤖 Auto-Trade ausgeführt:\n{trade['type'].upper()} @ {trade['entry']} (SL {trade['sl']}, TP {trade['tp']})")
+            trade = generate_trade_suggestion(parsed, score)
+            send_message(chat_id, f"🧠 Vorschlag: {trade['type'].upper()} @ {trade['entry']} (SL {trade['sl']}, TP {trade['tp']}, Score: {score})")
         return "ok"
 
     return send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
