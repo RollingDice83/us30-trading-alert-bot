@@ -114,6 +114,8 @@ def telegram():
 
     global OPEN_PRICE
 
+    response_sent = False
+
     if text.startswith("/help"):
         msg = f"📘 Befehle ({VERSION}):\n"
         msg += "/status – offene Positionen\n"
@@ -129,10 +131,12 @@ def telegram():
         msg += "/stats – Lernstatistik\n"
         msg += "/hedgecheck – Hedge Status anzeigen\n"
         send_message(chat_id, msg)
+        response_sent = True
 
     elif text.startswith("/zones") or text.startswith("/update"):
         msg = get_stdv_zones()
         send_message(chat_id, msg)
+        response_sent = True
 
     elif text.startswith("/openprice"):
         parts = text.split()
@@ -144,6 +148,7 @@ def telegram():
                 send_message(chat_id, "⚠️ Ungültiger Preis.")
         else:
             send_message(chat_id, "⚠️ Nutzung: /openprice [Preis]")
+        response_sent = True
 
     elif text.startswith("/signals"):
         if not SIGNALS:
@@ -153,11 +158,13 @@ def telegram():
             for s in SIGNALS[-5:]:
                 msg += f"• {s['text']} (Score {s['score']})\n"
             send_message(chat_id, msg)
+        response_sent = True
 
     elif text.startswith("/resetsignals"):
         SIGNALS.clear()
         SIGNAL_TIMESTAMPS.clear()
         send_message(chat_id, "🧹 Signal-Speicher gelöscht.")
+        response_sent = True
 
     elif text.startswith("/hedgecheck"):
         recent_short_signals = [
@@ -175,27 +182,25 @@ def telegram():
             level = "Niedrig"
         msg = f"🛡️ Hedge-Status-Check:\n• Short-Signale erkannt: {count}\n• Risiko-Level: {level}\n• Empfehlung: {advice}"
         send_message(chat_id, msg)
+        response_sent = True
 
-    elif re.match(r"^\d{4,6}(\.\d+)?$", text.strip()):
+    elif re.match(r"^\d{4,6}(\.\d+)?$", text.strip()) or any(
+        keyword in text.lower() for keyword in ["rsi", "momentum", "mss", "vix"]
+    ):
         msg, score = parse_signal(text.strip())
         density_alert = analyze_density()
         send_message(chat_id, msg)
         if density_alert:
             send_message(chat_id, density_alert)
-
-    elif any(keyword in text.lower() for keyword in ["rsi", "momentum", "mss", "vix"]):
-        msg, score = parse_signal(text.strip())
-        density_alert = analyze_density()
-        send_message(chat_id, msg)
-        if density_alert:
-            send_message(chat_id, density_alert)
+        response_sent = True
 
     elif text.startswith("/stats"):
         msg = f"📊 Stats:\nSignale: {len(SIGNALS)}\nLetzter Score: {SIGNALS[-1]['score'] if SIGNALS else '–'}\n"
         msg += hedge_ai()
         send_message(chat_id, msg)
+        response_sent = True
 
-    else:
+    if not response_sent:
         send_message(chat_id, "❌ Unbekannter Befehl. Nutze /help für alle Kommandos.")
 
     return "OK"
