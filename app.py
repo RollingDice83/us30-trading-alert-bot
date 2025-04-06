@@ -4,11 +4,12 @@ import json
 import time
 from datetime import datetime, timedelta
 from flask import Flask, request
+import requests
 
 app = Flask(__name__)
 
 # === Konfiguration ===
-VERSION = "v6.6"
+VERSION = "v6.7"
 TRADES = []
 SIGNALS = []
 SCORES = {}
@@ -100,8 +101,6 @@ def analyze_density():
     return None
 
 # === Telegram Versand ===
-import requests
-
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
@@ -109,7 +108,6 @@ def send_message(chat_id, text):
         requests.post(url, json=payload)
     except Exception as e:
         print(f"Telegram-Fehler: {e}")
-
 
 # === Telegram Handler ===
 @app.route("/telegram", methods=["POST"])
