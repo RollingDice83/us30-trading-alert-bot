@@ -3,7 +3,7 @@ import re, time, os, requests
 
 app = Flask(__name__)
 
-VERSION = "v6.0"
+VERSION = "v6.2"
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -150,7 +150,7 @@ def format_zones():
     if not open_price:
         return "ℹ️ Kein Opening Price gesetzt. Nutze /openprice [Preis]"
     msg = "📊 STDV-Zonen:\n"
-    for pct in [-5, -3, -1, 1, 3, 5]:
+    for pct in [-5, -4, -3, -2, -1, 1, 2, 3, 4, 5]:
         level = open_price * (1 + pct / 100)
         msg += f"{level:.0f} ({pct:+}%)\n"
     return msg
